@@ -567,7 +567,9 @@
     const rightPinch = state.right.pinch;
     const rightEnergy = state.right.energy;
 
-    const cutoffDrive = clamp(((1 - leftY) * 0.5) + leftPull * 0.62 + globalEnergy * 0.18, 0, 1);
+    const cutoffPull = clamp(leftPull / 1.55, 0, 1);
+    const cutoffColor = clamp(((1 - leftY) * 0.5) * cutoffPull, 0, 1);
+    const cutoffDrive = clamp(cutoffPull * 0.86 + cutoffColor * 0.1 + leftPinch * 0.04, 0, 1);
     const cutoff = 20 + Math.pow(cutoffDrive, 2.1) * 9980;
     const shimmerWet = clamp((((leftX + 1.2) / 2.4) * 0.82) + leftPull * 0.12 + state.duoSpread * 0.12, 0, 1);
     const resonance = 0.75 + leftPinch * 13 + leftEnergy * 4.6 + state.duoSpread * 2.4;
