@@ -567,8 +567,9 @@
     const rightPinch = state.right.pinch;
     const rightEnergy = state.right.energy;
 
-    const cutoff = 140 + Math.pow(clamp((1 - leftY) * 0.58 + leftPull * 1.2 + globalEnergy * 0.55, 0, 2.2), 2.24) * 11000;
-    const shimmerWet = clamp(0.04 + ((leftX + 1) * 0.5) * 0.7 + leftPull * 0.24 + state.duoSpread * 0.18, 0.02, 1);
+    const cutoffDrive = clamp(((1 - leftY) * 0.5) + leftPull * 0.62 + globalEnergy * 0.18, 0, 1);
+    const cutoff = 20 + Math.pow(cutoffDrive, 2.1) * 9980;
+    const shimmerWet = clamp((((leftX + 1.2) / 2.4) * 0.82) + leftPull * 0.12 + state.duoSpread * 0.12, 0, 1);
     const resonance = 0.75 + leftPinch * 13 + leftEnergy * 4.6 + state.duoSpread * 2.4;
     const grit = clamp(0.04 + ((1 - rightY) * 0.5) * 0.62 + rightPinch * 0.38 + rightPull * 0.22 + rightEnergy * 0.32, 0.02, 1);
     const detune = Math.round((rightX * 36) + state.detuneBias * 0.8 + rightEnergy * 18);
@@ -582,7 +583,7 @@
     filter1.Q.setTargetAtTime(resonance, now, 0.05);
     filter2.Q.setTargetAtTime(Math.min(resonance * 0.4, 8), now, 0.05);
     shimmerSend.gain.setTargetAtTime(shimmerWet, now, 0.06);
-    dryGain.gain.setTargetAtTime(0.88 - shimmerWet * 0.28, now, 0.06);
+    dryGain.gain.setTargetAtTime(Math.max(0, 1 - shimmerWet), now, 0.06);
     stereoPanner.pan.setTargetAtTime(pan, now, 0.08);
     lfo.frequency.setTargetAtTime(lfoRate, now, 0.08);
     lfoDepth.gain.setTargetAtTime(lfoAmt, now, 0.08);
