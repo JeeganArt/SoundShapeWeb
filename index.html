@@ -42,6 +42,17 @@
     position: relative;
   }
 
+  video {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    transform: scaleX(-1);
+    opacity: 0.18;
+    filter: saturate(0.7) contrast(1.1) brightness(0.8);
+  }
+
   canvas {
     position: absolute;
     inset: 0;
@@ -247,6 +258,7 @@
 </style>
 </head>
 <body>
+<video id="webcam" autoplay playsinline muted></video>
 <canvas id="scene"></canvas>
 
 <div class="hud">
@@ -303,18 +315,21 @@
     <h1>Open the drone.</h1>
     <p>
       This reuses the uploaded file’s web audio approach: layered oscillators, dual low-pass filtering,
-      shimmer reverb, smoothing, and a live analyser. The interaction is rebuilt around a centered deformable blob.
+      shimmer reverb, smoothing, live hand tracking, and a centered deformable blob.
     </p>
     <ul>
-      <li>Pull harder to deepen deformation and modulation depth.</li>
-      <li>Move around the sphere to switch parameter focus by region.</li>
-      <li>Pinch with two fingers to intensify resonance and fold pressure.</li>
+      <li>Pinch thumb and index to grab the blob surface in mid-air.</li>
+      <li>Move the pinch around the sphere to switch parameter focus by region.</li>
+      <li>Use two hands to widen, stretch, and intensify the response.</li>
     </ul>
-    <button class="start-btn" id="startBtn">Start Audio</button>
+    <button class="start-btn" id="startBtn">Start Camera + Audio</button>
   </div>
 </div>
 
-<script>
+<script type="module">
+  import { HandLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.18/vision_bundle.mjs";
+
+  const video = document.getElementById("webcam");
   const canvas = document.getElementById("scene");
   const ctx = canvas.getContext("2d");
 
@@ -337,7 +352,10 @@
     vel: 0
   }));
 
-  const pointers = new Map();
+  let handLandmarker;
+  let isRunning = false;
+  let lastHandTime = 0;
+
   const state = {
     active: false,
     targetAngle: 0,
@@ -351,6 +369,8 @@
     detuneBias: 0,
     zone: "Idle"
   };
+
+  const interactionPoints = [];
 
   let audioCtx;
   let analyser;
@@ -374,11 +394,6 @@
 
   function clamp(v, min, max) {
     return Math.min(max, Math.max(min, v));
-  }
-
-  function smoothstep(edge0, edge1, x) {
-    const t = clamp((x - edge0) / (edge1 - edge0), 0, 1);
-    return t * t * (3 - 2 * t);
   }
 
   function angleDelta(a, b) {
@@ -543,7 +558,7 @@
   }
 
   function updateInteraction() {
-    if (pointers.size === 0) {
+    if (interactionPoints.length === 0) {
       state.active = false;
       state.targetPull = lerp(state.targetPull, 0, 0.18);
       state.pinch = lerp(state.pinch, 0, 0.14);
@@ -552,7 +567,7 @@
     }
 
     state.active = true;
-    const pts = Array.from(pointers.values());
+    const pts = interactionPoints;
     const centerX = pts.reduce((sum, p) => sum + p.x, 0) / pts.length;
     const centerY = pts.reduce((sum, p) => sum + p.y, 0) / pts.length;
     const dx = centerX - cx;
@@ -568,6 +583,8 @@
       const a1 = Math.atan2(pts[0].y - cy, pts[0].x - cx);
       const a2 = Math.atan2(pts[1].y - cy, pts[1].x - cx);
       stretch = clamp(Math.abs(angleDelta(a1, a2)) / Math.PI, 0, 1);
+    } else {
+      pinch = pts[0].pinchStrength || 0;
     }
 
     const pull = clamp((dist - baseRadius * 0.72) / (baseRadius * 1.05), 0, 1.1);
@@ -743,6 +760,28 @@
     }
   }
 
+  function drawHands() {
+    for (const point of interactionPoints) {
+      ctx.beginPath();
+      ctx.arc(point.x, point.y, 10 + point.pinchStrength * 8, 0, TAU);
+      ctx.fillStyle = point.engaged ? "rgba(255, 199, 123, 0.4)" : "rgba(124, 246, 216, 0.2)";
+      ctx.fill();
+
+      ctx.beginPath();
+      ctx.arc(point.x, point.y, 20 + point.pinchStrength * 16, 0, TAU);
+      ctx.lineWidth = 1;
+      ctx.strokeStyle = point.engaged ? "rgba(255, 199, 123, 0.55)" : "rgba(124, 246, 216, 0.35)";
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.moveTo(point.thumbX, point.thumbY);
+      ctx.lineTo(point.indexX, point.indexY);
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = "rgba(255, 127, 142, 0.42)";
+      ctx.stroke();
+    }
+  }
+
   function drawAura() {
     const pulse = 0.5 + Math.sin(time * 0.02) * 0.5;
     const ringCount = 4;
@@ -786,60 +825,129 @@
     ctx.clearRect(0, 0, width, height);
     drawAura();
     drawBlob();
+    drawHands();
     drawWaveform();
 
     requestAnimationFrame(render);
   }
 
-  function pointFromEvent(e) {
-    return { x: e.clientX, y: e.clientY };
+  function pinchDist(lm) {
+    return Math.sqrt(
+      (lm[4].x - lm[8].x) ** 2 +
+      (lm[4].y - lm[8].y) ** 2 +
+      (lm[4].z - lm[8].z) ** 2
+    );
   }
 
-  function updatePointer(id, point) {
-    pointers.set(id, point);
+  function screenPoint(lm) {
+    return {
+      x: (1 - lm.x) * width,
+      y: lm.y * height
+    };
   }
 
-  function removePointer(id) {
-    pointers.delete(id);
+  function collectInteractionPoints(results) {
+    interactionPoints.length = 0;
+    if (!results.landmarks || !results.landmarks.length) return;
+
+    for (const lm of results.landmarks) {
+      const pinch = pinchDist(lm);
+      const pinchStrength = clamp(1.15 - pinch * 5.4, 0, 1);
+      const thumb = screenPoint(lm[4]);
+      const index = screenPoint(lm[8]);
+      const pinchPoint = {
+        x: (thumb.x + index.x) * 0.5,
+        y: (thumb.y + index.y) * 0.5,
+        thumbX: thumb.x,
+        thumbY: thumb.y,
+        indexX: index.x,
+        indexY: index.y,
+        pinchStrength,
+        engaged: pinchStrength > 0.3
+      };
+
+      if (pinchPoint.engaged) {
+        interactionPoints.push(pinchPoint);
+      }
+    }
   }
 
-  canvas.addEventListener("pointerdown", (e) => {
-    canvas.setPointerCapture(e.pointerId);
-    updatePointer(e.pointerId, pointFromEvent(e));
-  });
+  function detectHands() {
+    if (!isRunning) return;
+    if (video.readyState >= 2) {
+      const results = handLandmarker.detectForVideo(video, performance.now());
+      collectInteractionPoints(results);
+      if (interactionPoints.length > 0) {
+        lastHandTime = performance.now();
+      } else if (performance.now() - lastHandTime > 240) {
+        interactionPoints.length = 0;
+      }
+    }
+    requestAnimationFrame(detectHands);
+  }
 
-  canvas.addEventListener("pointermove", (e) => {
-    if (!pointers.has(e.pointerId)) return;
-    updatePointer(e.pointerId, pointFromEvent(e));
-  });
+  async function initHandTracking() {
+    const vision = await FilesetResolver.forVisionTasks(
+      "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.18/wasm"
+    );
+    handLandmarker = await HandLandmarker.createFromOptions(vision, {
+      baseOptions: {
+        modelAssetPath: "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task",
+        delegate: "GPU"
+      },
+      runningMode: "VIDEO",
+      numHands: 2
+    });
+  }
 
-  canvas.addEventListener("pointerup", (e) => {
-    removePointer(e.pointerId);
-  });
+  async function initCamera() {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { width: 1280, height: 720, facingMode: "user" },
+      audio: false
+    });
+    video.srcObject = stream;
+    return new Promise((resolve) => {
+      video.onloadedmetadata = async () => {
+        await video.play();
+        resolve();
+      };
+    });
+  }
 
-  canvas.addEventListener("pointercancel", (e) => {
-    removePointer(e.pointerId);
-  });
+  function resetUiToIdle() {
+    setText("zoneVal", "Idle");
+    setText("pullVal", "0%");
+    setText("pinchVal", "0%");
+    setText("energyVal", "0%");
+  }
 
   window.addEventListener("resize", resize);
 
   document.getElementById("startBtn").addEventListener("click", async () => {
     const btn = document.getElementById("startBtn");
     btn.disabled = true;
-    btn.textContent = "Starting...";
+    btn.textContent = "Opening camera...";
     try {
+      await initCamera();
+      btn.textContent = "Loading hand tracking...";
+      await initHandTracking();
+      btn.textContent = "Starting audio...";
       if (!audioCtx) initAudio();
       await audioCtx.resume();
       started = true;
+      isRunning = true;
+      lastHandTime = performance.now();
+      detectHands();
       document.getElementById("startOverlay").style.display = "none";
     } catch (error) {
       btn.disabled = false;
-      btn.textContent = "Audio Unavailable";
+      btn.textContent = "Camera / Audio Unavailable";
       console.error(error);
     }
   });
 
   resize();
+  resetUiToIdle();
   render();
 </script>
 </body>
