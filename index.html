@@ -213,6 +213,7 @@
   let isRunning = false;
   let lastHandTime = 0;
   const pointMemory = new Map();
+  const gripState = new Map(); // hysteresis: once pinched, stays engaged until fully released
 
   const state = {
     active: false,
@@ -318,42 +319,36 @@
   }
 
   function emitParticles() {
-    // Ambient orbit particles along the blob surface
-    if (time % 3 === 0) {
-      const angle = Math.random() * TAU;
-      const nodeIndex = Math.floor((angle / TAU) * nodes.length) % nodes.length;
-      const disp = nodes[nodeIndex].disp;
-      const r = blobRadius + disp + (Math.random() - 0.3) * 12;
-      const px = cx + Math.cos(angle) * r;
-      const py = cy + Math.sin(angle) * r;
-      spawnParticle(px, py, 0, 0, 60 + Math.random() * 80, 1.5 + Math.random() * 2, "orbit");
-    }
-
-    // Energy driven emission: more particles when hands are active
-    if (state.active && state.energy > 0.05) {
-      const count = Math.floor(state.energy * 3);
-      for (let j = 0; j < count; j++) {
-        const angle = state.targetAngle + (Math.random() - 0.5) * 1.5;
-        const nodeIndex = Math.floor(((angle % TAU + TAU) % TAU / TAU) * nodes.length) % nodes.length;
-        const disp = nodes[nodeIndex].disp;
-        const r = blobRadius + disp + Math.random() * 20;
-        const px = cx + Math.cos(angle) * r;
-        const py = cy + Math.sin(angle) * r;
-        const speed = 0.5 + state.energy * 2.5;
-        const vx = Math.cos(angle) * speed + (Math.random() - 0.5) * 1.2;
-        const vy = Math.sin(angle) * speed + (Math.random() - 0.5) * 1.2;
-        spawnParticle(px, py, vx, vy, 40 + Math.random() * 60, 1.8 + state.energy * 2.5, "burst");
-      }
-    }
-
-    // Pinch sparkle
+    // Particles ONLY appear at active pinch points, localized tightly
     for (const point of interactionPoints) {
-      if (point.pinchStrength > 0.5 && Math.random() < point.pinchStrength * 0.6) {
-        const px = point.x + (Math.random() - 0.5) * 20;
-        const py = point.y + (Math.random() - 0.5) * 20;
-        const vx = (Math.random() - 0.5) * 2;
-        const vy = (Math.random() - 0.5) * 2;
-        spawnParticle(px, py, vx, vy, 30 + Math.random() * 40, 1.2 + Math.random() * 1.5, "burst");
+      if (point.pinchStrength < 0.15) continue;
+
+      // Sparkles clustered right at the pinch location
+      const intensity = point.pinchStrength;
+      const count = Math.floor(intensity * 2.5 + point.motion * 2);
+      for (let j = 0; j < count; j++) {
+        const spread = 14 + point.motion * 18;
+        const px = point.x + (Math.random() - 0.5) * spread;
+        const py = point.y + (Math.random() - 0.5) * spread;
+        const speed = 0.3 + point.motion * 1.8;
+        const outAngle = Math.atan2(py - point.y, px - point.x) + (Math.random() - 0.5) * 0.8;
+        const vx = Math.cos(outAngle) * speed;
+        const vy = Math.sin(outAngle) * speed;
+        // Short lived so they vanish quickly on release
+        const life = 12 + Math.random() * 22;
+        const size = 1.0 + intensity * 2.0 + Math.random() * 1.2;
+        const type = point.handedness === "Left" ? "orbit" : "burst";
+        spawnParticle(px, py, vx, vy, life, size, type);
+      }
+
+      // A few particles along the tendril between blob and pinch
+      if (point.pixelDist > blobRadius * 1.1 && Math.random() < 0.5) {
+        const t = 0.3 + Math.random() * 0.6;
+        const tx = cx + (point.x - cx) * t;
+        const ty = cy + (point.y - cy) * t;
+        const vx = (Math.random() - 0.5) * 0.8;
+        const vy = (Math.random() - 0.5) * 0.8;
+        spawnParticle(tx, ty, vx, vy, 10 + Math.random() * 16, 1.2 + Math.random(), "orbit");
       }
     }
   }
@@ -578,7 +573,8 @@
       state.duoSpread = lerp(state.duoSpread, 0, 0.2);
     }
 
-    const pull = clamp((dist - baseRadius * 0.18) / (baseRadius * 1.8), 0, 1.55);
+    const pullMaxReach = Math.hypot(width, height) * 0.45;
+    const pull = clamp(dist / pullMaxReach, 0, 1.55);
     const prevAngle = state.targetAngle;
     const prevPull = state.targetPull;
 
@@ -640,19 +636,25 @@
 
       for (const point of interactionPoints) {
         const d = angleDelta(node.angle, point.angle);
-        const focusWidth = 0.08 + point.pinchStrength * 0.12 + state.stretch * 0.1;
+        const focusWidth = 0.06 + point.pinchStrength * 0.08 + state.stretch * 0.1;
         const focus = Math.exp(-(d * d) / focusWidth);
-        const dragLobe = focus * (point.pullStrength * baseRadius * (0.8 + point.pinchStrength * 0.72));
-        const counterLobe = Math.exp(-((Math.abs(Math.abs(d) - Math.PI)) ** 2) / 0.28) * (-point.pullStrength * baseRadius * 0.22);
+
+        /* The blob surface should reach the pinch point.
+           pixelDist is the raw distance from center to pinch;
+           we want the node displacement to bridge that gap. */
+        const reachDisp = Math.max(0, point.pixelDist - blobRadius);
+        const dragLobe = focus * reachDisp * (0.9 + point.pinchStrength * 0.4);
+
+        const counterLobe = Math.exp(-((Math.abs(Math.abs(d) - Math.PI)) ** 2) / 0.28) * (-reachDisp * 0.15 * focus);
         const ripple = Math.sin(d * (3 + point.motion * 2.4) - time * 0.08) * point.motion * 10;
         target += dragLobe + counterLobe + ripple;
       }
 
       target += Math.sin((node.angle + time * 0.01) * 2) * state.duoSpread * 3;
 
-      node.vel += (target - node.disp) * 0.11;
-      node.vel += -node.disp * 0.018;
-      node.vel *= 0.83;
+      node.vel += (target - node.disp) * 0.14;
+      node.vel += -node.disp * 0.012;
+      node.vel *= 0.82;
       node.disp += node.vel;
     }
 
@@ -873,6 +875,10 @@
     const halfW = width * 0.45;
     const halfH = height * 0.45;
 
+    /* Max reach for pullStrength: use half the screen diagonal so
+       dragging all the way to the edge gives full range */
+    const maxReach = Math.hypot(width, height) * 0.45;
+
     for (let i = 0; i < results.landmarks.length; i++) {
       const lm = results.landmarks[i];
       const pinch = pinchDist(lm);
@@ -883,6 +889,17 @@
       const pinchY = (thumb.y + index.y) * 0.5;
       const handedness = results.handednesses?.[i]?.[0]?.categoryName || (pinchX < cx ? "Left" : "Right");
       const key = handedness;
+
+      /* Hysteresis: grab threshold is tight, release threshold is loose.
+         Once gripped, you stay engaged until fingers open wide. */
+      const wasGripped = gripState.get(key) || false;
+      const grabThreshold = 0.18;
+      const releaseThreshold = 0.08;
+      const engaged = wasGripped
+        ? pinchStrength > releaseThreshold
+        : pinchStrength > grabThreshold;
+      gripState.set(key, engaged);
+
       const prev = pointMemory.get(key);
       const vx = prev ? pinchX - prev.x : 0;
       const vy = prev ? pinchY - prev.y : 0;
@@ -891,7 +908,8 @@
       const dy = pinchY - cy;
       const dist = Math.hypot(dx, dy);
       const angle = Math.atan2(dy, dx);
-      const pullStrength = clamp((dist - baseRadius * 0.18) / (baseRadius * 1.8), 0, 1.55);
+      /* pullStrength now scales against screen diagonal, not baseRadius */
+      const pullStrength = clamp(dist / maxReach, 0, 1.55);
 
       const pinchPoint = {
         x: pinchX,
@@ -902,14 +920,15 @@
         indexY: index.y,
         handedness,
         angle,
-        /* FIX: normalize against screen dimensions so the full
-           camera frame maps to the full parameter range */
         normX: clamp(dx / halfW, -1.2, 1.2),
         normY: clamp(dy / halfH, -1.2, 1.2),
         pullStrength,
+        /* pixelDist: raw pixel distance from blob center, used
+           to extend the blob all the way to the pinch point */
+        pixelDist: dist,
         motion: clamp(speed / 26, 0, 1),
         pinchStrength,
-        engaged: pinchStrength > 0.22
+        engaged
       };
 
       pointMemory.set(key, { x: pinchX, y: pinchY });
@@ -922,6 +941,7 @@
     for (const key of Array.from(pointMemory.keys())) {
       if (!interactionPoints.some((point) => point.handedness === key)) {
         pointMemory.delete(key);
+        gripState.set(key, false);
       }
     }
   }
