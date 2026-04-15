@@ -1,0 +1,846 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Centered Blob Drone</title>
+<style>
+  :root {
+    --bg: #07111a;
+    --bg2: #0f2430;
+    --panel: rgba(10, 22, 31, 0.72);
+    --line: rgba(154, 230, 255, 0.16);
+    --text: #d6edf5;
+    --muted: #7fa1ad;
+    --accent: #7cf6d8;
+    --accent2: #6eb2ff;
+    --accent3: #ffc77b;
+    --danger: #ff7f8e;
+  }
+
+  * {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+  }
+
+  html, body {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background:
+      radial-gradient(circle at 50% 42%, rgba(110, 178, 255, 0.2), transparent 28%),
+      radial-gradient(circle at 18% 18%, rgba(124, 246, 216, 0.12), transparent 20%),
+      radial-gradient(circle at 82% 78%, rgba(255, 199, 123, 0.1), transparent 18%),
+      linear-gradient(180deg, var(--bg2), var(--bg));
+    color: var(--text);
+    font-family: Georgia, "Times New Roman", serif;
+    touch-action: none;
+  }
+
+  body {
+    position: relative;
+  }
+
+  canvas {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+  }
+
+  .hud {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+  }
+
+  .topbar,
+  .bottombar {
+    position: absolute;
+    left: 20px;
+    right: 20px;
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+    pointer-events: none;
+  }
+
+  .topbar {
+    top: 18px;
+    align-items: flex-start;
+  }
+
+  .bottombar {
+    bottom: 18px;
+    align-items: flex-end;
+  }
+
+  .card {
+    min-width: 210px;
+    max-width: min(360px, 42vw);
+    padding: 14px 16px;
+    border: 1px solid var(--line);
+    border-radius: 18px;
+    background: var(--panel);
+    backdrop-filter: blur(18px);
+    box-shadow: 0 14px 42px rgba(0, 0, 0, 0.26);
+  }
+
+  .title {
+    font-size: 14px;
+    letter-spacing: 0.24em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 6px;
+  }
+
+  .headline {
+    font-size: clamp(22px, 3.6vw, 42px);
+    line-height: 0.96;
+    max-width: 10ch;
+  }
+
+  .copy {
+    margin-top: 10px;
+    color: var(--muted);
+    font-size: 14px;
+    line-height: 1.45;
+  }
+
+  .legend {
+    display: grid;
+    gap: 8px;
+    font-size: 13px;
+    color: var(--muted);
+  }
+
+  .legend strong,
+  .stat strong {
+    color: var(--text);
+    font-weight: 600;
+  }
+
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(90px, 1fr));
+    gap: 8px 14px;
+  }
+
+  .stat {
+    font-size: 12px;
+    line-height: 1.35;
+    color: var(--muted);
+  }
+
+  .stat-value {
+    display: block;
+    margin-top: 2px;
+    font-size: 18px;
+    color: var(--text);
+  }
+
+  .center-label {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    width: min(300px, 80vw);
+    text-align: center;
+    pointer-events: none;
+  }
+
+  .center-label .ring {
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    border: 1px solid rgba(255, 255, 255, 0.45);
+    margin: 0 auto 12px;
+    box-shadow: 0 0 18px rgba(124, 246, 216, 0.18);
+  }
+
+  .center-label p {
+    color: rgba(214, 237, 245, 0.78);
+    font-size: 13px;
+    line-height: 1.5;
+  }
+
+  .center-label strong {
+    color: var(--text);
+  }
+
+  .start-overlay {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    background: rgba(4, 9, 13, 0.58);
+    backdrop-filter: blur(16px);
+    z-index: 10;
+  }
+
+  .start-panel {
+    width: min(520px, calc(100vw - 40px));
+    padding: 24px;
+    border-radius: 24px;
+    border: 1px solid var(--line);
+    background: rgba(6, 14, 20, 0.9);
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
+  }
+
+  .start-panel h1 {
+    font-size: clamp(30px, 5vw, 54px);
+    line-height: 0.94;
+    margin-bottom: 12px;
+  }
+
+  .start-panel p {
+    color: var(--muted);
+    line-height: 1.5;
+    margin-bottom: 18px;
+  }
+
+  .start-panel ul {
+    list-style: none;
+    display: grid;
+    gap: 10px;
+    color: var(--text);
+    margin-bottom: 22px;
+  }
+
+  .start-btn {
+    pointer-events: auto;
+    border: none;
+    border-radius: 999px;
+    padding: 14px 22px;
+    font-size: 14px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    color: #041019;
+    cursor: pointer;
+    min-width: 200px;
+  }
+
+  .start-btn:disabled {
+    opacity: 0.6;
+    cursor: progress;
+  }
+
+  @media (max-width: 780px) {
+    .topbar,
+    .bottombar {
+      left: 12px;
+      right: 12px;
+      flex-direction: column;
+    }
+
+    .card {
+      max-width: none;
+      min-width: 0;
+    }
+
+    .headline {
+      max-width: none;
+    }
+  }
+</style>
+</head>
+<body>
+<canvas id="scene"></canvas>
+
+<div class="hud">
+  <div class="topbar">
+    <div class="card">
+      <div class="title">Blob Drone</div>
+      <div class="headline">Pinned core, living surface.</div>
+      <div class="copy">
+        Pull from the rim, drag across regions, or use two fingers to pinch and stretch.
+        The center of mass stays fixed while the skin and drone react.
+      </div>
+    </div>
+    <div class="card">
+      <div class="title">Mapping</div>
+      <div class="legend">
+        <div><strong>Top:</strong> brighter cutoff and upper harmonics</div>
+        <div><strong>Right:</strong> wetter shimmer and stereo bloom</div>
+        <div><strong>Bottom:</strong> grit, fold, and pressure</div>
+        <div><strong>Left:</strong> beating, detune, and darker drift</div>
+        <div><strong>Back and forth:</strong> gesture energy adds transient motion</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="center-label">
+    <div class="ring"></div>
+    <p><strong>Core anchored to screen center.</strong><br>Touch, click, or pinch the surface to sculpt the drone.</p>
+  </div>
+
+  <div class="bottombar">
+    <div class="card">
+      <div class="title">Live State</div>
+      <div class="stats">
+        <div class="stat"><strong>Zone</strong><span class="stat-value" id="zoneVal">Idle</span></div>
+        <div class="stat"><strong>Pull</strong><span class="stat-value" id="pullVal">0%</span></div>
+        <div class="stat"><strong>Pinch</strong><span class="stat-value" id="pinchVal">0%</span></div>
+        <div class="stat"><strong>Energy</strong><span class="stat-value" id="energyVal">0%</span></div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="title">Sound</div>
+      <div class="stats">
+        <div class="stat"><strong>Cutoff</strong><span class="stat-value" id="cutoffVal">420 Hz</span></div>
+        <div class="stat"><strong>Reverb</strong><span class="stat-value" id="reverbVal">28%</span></div>
+        <div class="stat"><strong>Grit</strong><span class="stat-value" id="gritVal">18%</span></div>
+        <div class="stat"><strong>Detune</strong><span class="stat-value" id="detuneVal">4 ct</span></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="start-overlay" id="startOverlay">
+  <div class="start-panel">
+    <h1>Open the drone.</h1>
+    <p>
+      This reuses the uploaded file’s web audio approach: layered oscillators, dual low-pass filtering,
+      shimmer reverb, smoothing, and a live analyser. The interaction is rebuilt around a centered deformable blob.
+    </p>
+    <ul>
+      <li>Pull harder to deepen deformation and modulation depth.</li>
+      <li>Move around the sphere to switch parameter focus by region.</li>
+      <li>Pinch with two fingers to intensify resonance and fold pressure.</li>
+    </ul>
+    <button class="start-btn" id="startBtn">Start Audio</button>
+  </div>
+</div>
+
+<script>
+  const canvas = document.getElementById("scene");
+  const ctx = canvas.getContext("2d");
+
+  const POINTS = 88;
+  const TAU = Math.PI * 2;
+  const DPR = Math.min(window.devicePixelRatio || 1, 2);
+
+  let width = 0;
+  let height = 0;
+  let cx = 0;
+  let cy = 0;
+  let baseRadius = 0;
+  let blobRadius = 0;
+  let innerRadius = 0;
+  let time = 0;
+
+  const nodes = Array.from({ length: POINTS }, (_, i) => ({
+    angle: (i / POINTS) * TAU,
+    disp: 0,
+    vel: 0
+  }));
+
+  const pointers = new Map();
+  const state = {
+    active: false,
+    targetAngle: 0,
+    targetPull: 0,
+    pull: 0,
+    pinch: 0,
+    stretch: 0,
+    radialVelocity: 0,
+    tangentialVelocity: 0,
+    energy: 0,
+    detuneBias: 0,
+    zone: "Idle"
+  };
+
+  let audioCtx;
+  let analyser;
+  let masterGain;
+  let bodyGain;
+  let shimmerSend;
+  let dryGain;
+  let filter1;
+  let filter2;
+  let waveshaper;
+  let stereoPanner;
+  let convolver;
+  let lfo;
+  let lfoDepth;
+  let droneVoices = [];
+  let started = false;
+
+  function lerp(a, b, t) {
+    return a + (b - a) * t;
+  }
+
+  function clamp(v, min, max) {
+    return Math.min(max, Math.max(min, v));
+  }
+
+  function smoothstep(edge0, edge1, x) {
+    const t = clamp((x - edge0) / (edge1 - edge0), 0, 1);
+    return t * t * (3 - 2 * t);
+  }
+
+  function angleDelta(a, b) {
+    let d = a - b;
+    while (d > Math.PI) d -= TAU;
+    while (d < -Math.PI) d += TAU;
+    return d;
+  }
+
+  function resize() {
+    width = window.innerWidth;
+    height = window.innerHeight;
+    canvas.width = Math.floor(width * DPR);
+    canvas.height = Math.floor(height * DPR);
+    canvas.style.width = width + "px";
+    canvas.style.height = height + "px";
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    cx = width * 0.5;
+    cy = height * 0.5;
+    baseRadius = Math.min(width, height) * 0.18;
+    blobRadius = baseRadius;
+    innerRadius = baseRadius * 0.66;
+  }
+
+  function createShimmerIR(ctx, duration, decay, brightness) {
+    const len = Math.floor(ctx.sampleRate * duration);
+    const buffer = ctx.createBuffer(2, len, ctx.sampleRate);
+    for (let ch = 0; ch < 2; ch++) {
+      const data = buffer.getChannelData(ch);
+      for (let i = 0; i < len; i++) {
+        const t = i / ctx.sampleRate;
+        const env = Math.pow(1 - i / len, decay);
+        let sample = (Math.random() * 2 - 1) * env;
+        sample += Math.sin(TAU * 1570 * t + ch * 0.6) * env * 0.02 * brightness;
+        sample += Math.sin(TAU * 3180 * t + ch * 1.1) * env * 0.018 * brightness;
+        sample += Math.sin(TAU * 5200 * t + ch * 1.7) * env * 0.014 * brightness;
+        data[i] = sample * 0.42;
+      }
+    }
+    return buffer;
+  }
+
+  function makeDistortionCurve(amount) {
+    const samples = 4096;
+    const curve = new Float32Array(samples);
+    const k = amount * 120 + 1;
+    for (let i = 0; i < samples; i++) {
+      const x = (i * 2) / (samples - 1) - 1;
+      curve[i] = ((1 + k) * x) / (1 + k * Math.abs(x));
+    }
+    return curve;
+  }
+
+  function initAudio() {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+    filter1 = audioCtx.createBiquadFilter();
+    filter1.type = "lowpass";
+    filter1.frequency.value = 420;
+    filter1.Q.value = 0.9;
+
+    filter2 = audioCtx.createBiquadFilter();
+    filter2.type = "lowpass";
+    filter2.frequency.value = 1200;
+    filter2.Q.value = 0.4;
+
+    waveshaper = audioCtx.createWaveShaper();
+    waveshaper.curve = makeDistortionCurve(0.18);
+    waveshaper.oversample = "4x";
+
+    stereoPanner = audioCtx.createStereoPanner();
+    stereoPanner.pan.value = 0;
+
+    dryGain = audioCtx.createGain();
+    dryGain.gain.value = 0.78;
+
+    shimmerSend = audioCtx.createGain();
+    shimmerSend.gain.value = 0.28;
+
+    masterGain = audioCtx.createGain();
+    masterGain.gain.value = 0.55;
+
+    bodyGain = audioCtx.createGain();
+    bodyGain.gain.value = 0.22;
+
+    convolver = audioCtx.createConvolver();
+    convolver.buffer = createShimmerIR(audioCtx, 4.2, 1.9, 1);
+
+    const reverbBright = audioCtx.createBiquadFilter();
+    reverbBright.type = "highpass";
+    reverbBright.frequency.value = 280;
+    reverbBright.Q.value = 0.5;
+
+    const reverbShelf = audioCtx.createBiquadFilter();
+    reverbShelf.type = "highshelf";
+    reverbShelf.frequency.value = 2600;
+    reverbShelf.gain.value = 5;
+
+    analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 2048;
+
+    lfo = audioCtx.createOscillator();
+    lfo.type = "sine";
+    lfo.frequency.value = 0.18;
+    lfoDepth = audioCtx.createGain();
+    lfoDepth.gain.value = 6;
+    lfo.connect(lfoDepth);
+    lfoDepth.connect(filter1.detune);
+
+    droneVoices = [
+      { ratio: 1, gain: 0.21, type: "sawtooth", detune: -4 },
+      { ratio: 1.5, gain: 0.09, type: "triangle", detune: 3 },
+      { ratio: 2, gain: 0.06, type: "sine", detune: 6 }
+    ].map((voice) => {
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = voice.type;
+      osc.frequency.value = 82.41 * voice.ratio;
+      osc.detune.value = voice.detune;
+      gain.gain.value = voice.gain;
+      osc.connect(gain);
+      gain.connect(bodyGain);
+      osc.start();
+      return { ...voice, osc, gain };
+    });
+
+    bodyGain.connect(waveshaper);
+    waveshaper.connect(filter1);
+    filter1.connect(filter2);
+    filter2.connect(stereoPanner);
+    stereoPanner.connect(dryGain);
+    dryGain.connect(masterGain);
+    filter2.connect(reverbBright);
+    reverbBright.connect(convolver);
+    convolver.connect(reverbShelf);
+    reverbShelf.connect(shimmerSend);
+    shimmerSend.connect(masterGain);
+    masterGain.connect(analyser);
+    analyser.connect(audioCtx.destination);
+
+    lfo.start();
+  }
+
+  function setText(id, value) {
+    document.getElementById(id).textContent = value;
+  }
+
+  function regionWeights(angle) {
+    const top = Math.max(0, Math.cos(angle + Math.PI / 2));
+    const right = Math.max(0, Math.cos(angle));
+    const bottom = Math.max(0, Math.cos(angle - Math.PI / 2));
+    const left = Math.max(0, Math.cos(angle + Math.PI));
+    return { top, right, bottom, left };
+  }
+
+  function regionName(angle) {
+    const deg = (angle * 180 / Math.PI + 360) % 360;
+    if (deg >= 315 || deg < 45) return "Right";
+    if (deg < 135) return "Bottom";
+    if (deg < 225) return "Left";
+    return "Top";
+  }
+
+  function updateInteraction() {
+    if (pointers.size === 0) {
+      state.active = false;
+      state.targetPull = lerp(state.targetPull, 0, 0.18);
+      state.pinch = lerp(state.pinch, 0, 0.14);
+      state.stretch = lerp(state.stretch, 0, 0.16);
+      return;
+    }
+
+    state.active = true;
+    const pts = Array.from(pointers.values());
+    const centerX = pts.reduce((sum, p) => sum + p.x, 0) / pts.length;
+    const centerY = pts.reduce((sum, p) => sum + p.y, 0) / pts.length;
+    const dx = centerX - cx;
+    const dy = centerY - cy;
+    const dist = Math.hypot(dx, dy);
+    const angle = Math.atan2(dy, dx);
+
+    let pinch = 0;
+    let stretch = 0;
+    if (pts.length >= 2) {
+      const d = Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y);
+      pinch = clamp((d - blobRadius * 0.3) / (blobRadius * 0.9), 0, 1);
+      const a1 = Math.atan2(pts[0].y - cy, pts[0].x - cx);
+      const a2 = Math.atan2(pts[1].y - cy, pts[1].x - cx);
+      stretch = clamp(Math.abs(angleDelta(a1, a2)) / Math.PI, 0, 1);
+    }
+
+    const pull = clamp((dist - baseRadius * 0.72) / (baseRadius * 1.05), 0, 1.1);
+    const prevAngle = state.targetAngle;
+    const prevPull = state.targetPull;
+
+    state.targetAngle = angle;
+    state.targetPull = lerp(state.targetPull, pull, 0.24);
+    state.pull = lerp(state.pull, state.targetPull, 0.22);
+    state.pinch = lerp(state.pinch, pinch, 0.2);
+    state.stretch = lerp(state.stretch, stretch, 0.22);
+
+    const radialDelta = state.targetPull - prevPull;
+    const angularDelta = angleDelta(angle, prevAngle);
+    state.radialVelocity = lerp(state.radialVelocity, radialDelta * 18, 0.3);
+    state.tangentialVelocity = lerp(state.tangentialVelocity, angularDelta * 14, 0.34);
+    const gestureImpulse = Math.min(1, Math.abs(state.radialVelocity) * 0.65 + Math.abs(state.tangentialVelocity) * 0.55);
+    state.energy = clamp(lerp(state.energy, gestureImpulse, 0.18) * 0.985, 0, 1);
+    state.detuneBias = lerp(state.detuneBias, state.tangentialVelocity * 9, 0.12);
+    state.zone = regionName(angle);
+  }
+
+  function applyBlobPhysics() {
+    const activeAngle = state.targetAngle;
+    const pullStrength = state.pull;
+    const pinchBoost = state.pinch;
+    const energyBoost = state.energy;
+    blobRadius = lerp(blobRadius, baseRadius * (1 + pullStrength * 0.08 + pinchBoost * 0.03), 0.08);
+    innerRadius = lerp(innerRadius, baseRadius * (0.66 - pinchBoost * 0.08 + energyBoost * 0.03), 0.08);
+
+    for (const node of nodes) {
+      const d = angleDelta(node.angle, activeAngle);
+      const focus = Math.exp(-(d * d) / (0.16 + state.stretch * 0.28));
+      const dragLobe = state.active ? focus * (pullStrength * baseRadius * (0.55 + pinchBoost * 0.3)) : 0;
+      const counterLobe = state.active ? Math.exp(-((Math.abs(Math.abs(d) - Math.PI)) ** 2) / 0.42) * (-pullStrength * baseRadius * 0.18) : 0;
+      const ripple = state.active ? Math.sin(d * 4 - time * 0.08) * energyBoost * 8 : 0;
+      const target = dragLobe + counterLobe + ripple;
+
+      node.vel += (target - node.disp) * 0.11;
+      node.vel += -node.disp * 0.018;
+      node.vel *= 0.83;
+      node.disp += node.vel;
+    }
+
+    for (let i = 0; i < nodes.length; i++) {
+      const prev = nodes[(i - 1 + nodes.length) % nodes.length];
+      const next = nodes[(i + 1) % nodes.length];
+      nodes[i].disp += (prev.disp + next.disp - 2 * nodes[i].disp) * 0.16;
+    }
+  }
+
+  function updateAudio() {
+    if (!started || !audioCtx) return;
+    const now = audioCtx.currentTime;
+    const weights = regionWeights(state.targetAngle);
+
+    const topAmt = weights.top;
+    const rightAmt = weights.right;
+    const bottomAmt = weights.bottom;
+    const leftAmt = weights.left;
+    const pull = clamp(state.pull, 0, 1);
+    const pinch = state.pinch;
+    const energy = state.energy;
+
+    const cutoff = 160 + Math.pow(topAmt * 0.85 + pull * 0.72 + energy * 0.5, 2.15) * 6600;
+    const shimmerWet = clamp(0.14 + rightAmt * 0.38 + pull * 0.22 + energy * 0.14, 0.08, 0.92);
+    const grit = clamp(0.12 + bottomAmt * 0.42 + pinch * 0.26 + energy * 0.2, 0.08, 0.96);
+    const detune = Math.round((leftAmt * 16 + Math.abs(state.detuneBias) + energy * 10) * (state.tangentialVelocity < 0 ? -1 : 1));
+    const resonance = 0.8 + pinch * 8 + energy * 3.5 + topAmt * 1.8;
+    const pan = clamp((rightAmt - leftAmt) * 0.7 + state.tangentialVelocity * 0.12, -1, 1);
+    const lfoRate = 0.12 + pinch * 0.55 + energy * 0.33;
+    const lfoAmt = 4 + topAmt * 14 + leftAmt * 8 + energy * 10;
+
+    filter1.frequency.setTargetAtTime(cutoff, now, 0.04);
+    filter2.frequency.setTargetAtTime(cutoff * (1.6 + topAmt * 0.8), now, 0.05);
+    filter1.Q.setTargetAtTime(resonance, now, 0.05);
+    filter2.Q.setTargetAtTime(Math.min(resonance * 0.4, 6), now, 0.05);
+    shimmerSend.gain.setTargetAtTime(shimmerWet, now, 0.06);
+    dryGain.gain.setTargetAtTime(0.88 - shimmerWet * 0.28, now, 0.06);
+    stereoPanner.pan.setTargetAtTime(pan, now, 0.08);
+    lfo.frequency.setTargetAtTime(lfoRate, now, 0.08);
+    lfoDepth.gain.setTargetAtTime(lfoAmt, now, 0.08);
+    waveshaper.curve = makeDistortionCurve(grit);
+
+    const baseFreq = 73.42 + topAmt * 10 + leftAmt * 4;
+    droneVoices[0].osc.frequency.setTargetAtTime(baseFreq, now, 0.08);
+    droneVoices[1].osc.frequency.setTargetAtTime(baseFreq * (1.498 + rightAmt * 0.01), now, 0.08);
+    droneVoices[2].osc.frequency.setTargetAtTime(baseFreq * (1.996 + topAmt * 0.015), now, 0.08);
+    droneVoices[0].osc.detune.setTargetAtTime(detune * 0.6, now, 0.05);
+    droneVoices[1].osc.detune.setTargetAtTime(-detune * 0.4 + pinch * 8, now, 0.05);
+    droneVoices[2].osc.detune.setTargetAtTime(detune * 0.25 + energy * 6, now, 0.05);
+    bodyGain.gain.setTargetAtTime(0.18 + pull * 0.09 + energy * 0.06, now, 0.08);
+    masterGain.gain.setTargetAtTime(0.5 + pull * 0.06, now, 0.1);
+
+    setText("zoneVal", state.zone);
+    setText("pullVal", Math.round(pull * 100) + "%");
+    setText("pinchVal", Math.round(pinch * 100) + "%");
+    setText("energyVal", Math.round(energy * 100) + "%");
+    setText("cutoffVal", Math.round(cutoff) + " Hz");
+    setText("reverbVal", Math.round(shimmerWet * 100) + "%");
+    setText("gritVal", Math.round(grit * 100) + "%");
+    setText("detuneVal", detune + " ct");
+  }
+
+  function drawBlob() {
+    const gradient = ctx.createRadialGradient(cx, cy, innerRadius * 0.2, cx, cy, blobRadius * 1.35);
+    gradient.addColorStop(0, "rgba(164, 229, 255, 0.34)");
+    gradient.addColorStop(0.36, "rgba(110, 178, 255, 0.18)");
+    gradient.addColorStop(0.68, "rgba(124, 246, 216, 0.1)");
+    gradient.addColorStop(1, "rgba(124, 246, 216, 0.02)");
+
+    ctx.beginPath();
+    for (let i = 0; i < nodes.length; i++) {
+      const node = nodes[i];
+      const r = blobRadius + node.disp;
+      const x = cx + Math.cos(node.angle) * r;
+      const y = cy + Math.sin(node.angle) * r;
+      if (i === 0) {
+        ctx.moveTo(x, y);
+      } else {
+        const prev = nodes[i - 1];
+        const prevR = blobRadius + prev.disp;
+        const px = cx + Math.cos(prev.angle) * prevR;
+        const py = cy + Math.sin(prev.angle) * prevR;
+        const mx = (px + x) * 0.5;
+        const my = (py + y) * 0.5;
+        ctx.quadraticCurveTo(px, py, mx, my);
+      }
+    }
+    const first = nodes[0];
+    const firstR = blobRadius + first.disp;
+    const firstX = cx + Math.cos(first.angle) * firstR;
+    const firstY = cy + Math.sin(first.angle) * firstR;
+    const last = nodes[nodes.length - 1];
+    const lastR = blobRadius + last.disp;
+    const lastX = cx + Math.cos(last.angle) * lastR;
+    const lastY = cy + Math.sin(last.angle) * lastR;
+    ctx.quadraticCurveTo(lastX, lastY, firstX, firstY);
+    ctx.closePath();
+
+    ctx.fillStyle = gradient;
+    ctx.fill();
+    ctx.lineWidth = 1.4;
+    ctx.strokeStyle = "rgba(196, 235, 255, 0.62)";
+    ctx.shadowColor = "rgba(124, 246, 216, 0.25)";
+    ctx.shadowBlur = 30;
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+
+    ctx.beginPath();
+    ctx.arc(cx, cy, innerRadius, 0, TAU);
+    ctx.fillStyle = "rgba(255, 255, 255, 0.05)";
+    ctx.fill();
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.18)";
+    ctx.stroke();
+
+    if (state.active) {
+      const r = blobRadius + Math.max(0, state.pull) * baseRadius * 0.6;
+      const x = cx + Math.cos(state.targetAngle) * r;
+      const y = cy + Math.sin(state.targetAngle) * r;
+      ctx.beginPath();
+      ctx.moveTo(cx, cy);
+      ctx.lineTo(x, y);
+      ctx.strokeStyle = "rgba(255, 199, 123, 0.28)";
+      ctx.setLineDash([8, 10]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.beginPath();
+      ctx.arc(x, y, 8 + state.energy * 12, 0, TAU);
+      ctx.fillStyle = "rgba(255, 199, 123, 0.35)";
+      ctx.fill();
+    }
+  }
+
+  function drawAura() {
+    const pulse = 0.5 + Math.sin(time * 0.02) * 0.5;
+    const ringCount = 4;
+    for (let i = 0; i < ringCount; i++) {
+      const t = i / (ringCount - 1);
+      const radius = baseRadius * (1.18 + t * 0.6 + pulse * 0.02) + state.energy * 18;
+      ctx.beginPath();
+      ctx.arc(cx, cy, radius, 0, TAU);
+      ctx.lineWidth = 1;
+      ctx.strokeStyle = `rgba(126, 208, 255, ${0.12 - t * 0.025})`;
+      ctx.stroke();
+    }
+  }
+
+  function drawWaveform() {
+    if (!analyser) return;
+    const data = new Uint8Array(analyser.fftSize);
+    analyser.getByteTimeDomainData(data);
+    const yBase = height - 76;
+    const xStart = Math.max(20, width * 0.34);
+    const xEnd = width - 20;
+    const waveWidth = xEnd - xStart;
+    ctx.beginPath();
+    for (let i = 0; i < data.length; i++) {
+      const x = xStart + (i / (data.length - 1)) * waveWidth;
+      const y = yBase + ((data[i] - 128) / 128) * 18;
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.lineWidth = 1.2;
+    ctx.strokeStyle = "rgba(124, 246, 216, 0.48)";
+    ctx.stroke();
+  }
+
+  function render() {
+    time += 1;
+    updateInteraction();
+    applyBlobPhysics();
+    updateAudio();
+
+    ctx.clearRect(0, 0, width, height);
+    drawAura();
+    drawBlob();
+    drawWaveform();
+
+    requestAnimationFrame(render);
+  }
+
+  function pointFromEvent(e) {
+    return { x: e.clientX, y: e.clientY };
+  }
+
+  function updatePointer(id, point) {
+    pointers.set(id, point);
+  }
+
+  function removePointer(id) {
+    pointers.delete(id);
+  }
+
+  canvas.addEventListener("pointerdown", (e) => {
+    canvas.setPointerCapture(e.pointerId);
+    updatePointer(e.pointerId, pointFromEvent(e));
+  });
+
+  canvas.addEventListener("pointermove", (e) => {
+    if (!pointers.has(e.pointerId)) return;
+    updatePointer(e.pointerId, pointFromEvent(e));
+  });
+
+  canvas.addEventListener("pointerup", (e) => {
+    removePointer(e.pointerId);
+  });
+
+  canvas.addEventListener("pointercancel", (e) => {
+    removePointer(e.pointerId);
+  });
+
+  window.addEventListener("resize", resize);
+
+  document.getElementById("startBtn").addEventListener("click", async () => {
+    const btn = document.getElementById("startBtn");
+    btn.disabled = true;
+    btn.textContent = "Starting...";
+    try {
+      if (!audioCtx) initAudio();
+      await audioCtx.resume();
+      started = true;
+      document.getElementById("startOverlay").style.display = "none";
+    } catch (error) {
+      btn.disabled = false;
+      btn.textContent = "Audio Unavailable";
+      console.error(error);
+    }
+  });
+
+  resize();
+  render();
+</script>
+</body>
+</html>
