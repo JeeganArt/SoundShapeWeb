@@ -274,11 +274,11 @@
     <div class="card">
       <div class="title">Mapping</div>
       <div class="legend">
-        <div><strong>Top:</strong> brighter cutoff and upper harmonics</div>
-        <div><strong>Right:</strong> wetter shimmer and stereo bloom</div>
-        <div><strong>Bottom:</strong> grit, fold, and pressure</div>
-        <div><strong>Left:</strong> beating, detune, and darker drift</div>
-        <div><strong>Back and forth:</strong> gesture energy adds transient motion</div>
+        <div><strong>Left hand:</strong> spectral sculpting, cutoff, resonance, reverb</div>
+        <div><strong>Right hand:</strong> texture sculpting, grit, detune, stereo spread</div>
+        <div><strong>Pull outward:</strong> deeper deformation and modulation depth</div>
+        <div><strong>Pinch harder:</strong> more pressure and sharper focus</div>
+        <div><strong>Both hands at once:</strong> two independent touchpoints plus stretch coupling</div>
       </div>
     </div>
   </div>
@@ -292,7 +292,7 @@
     <div class="card">
       <div class="title">Live State</div>
       <div class="stats">
-        <div class="stat"><strong>Zone</strong><span class="stat-value" id="zoneVal">Idle</span></div>
+        <div class="stat"><strong>Mode</strong><span class="stat-value" id="zoneVal">Idle</span></div>
         <div class="stat"><strong>Pull</strong><span class="stat-value" id="pullVal">0%</span></div>
         <div class="stat"><strong>Pinch</strong><span class="stat-value" id="pinchVal">0%</span></div>
         <div class="stat"><strong>Energy</strong><span class="stat-value" id="energyVal">0%</span></div>
@@ -319,8 +319,9 @@
     </p>
     <ul>
       <li>Pinch thumb and index to grab the blob surface in mid-air.</li>
-      <li>Move the pinch around the sphere to switch parameter focus by region.</li>
-      <li>Use two hands to widen, stretch, and intensify the response.</li>
+      <li>Left hand edits spectral shape, right hand edits texture and motion.</li>
+      <li>Both pinches stay active at the same time instead of collapsing to one average point.</li>
+      <li>Stretching both hands apart couples the blob and opens extra space in the drone.</li>
     </ul>
     <button class="start-btn" id="startBtn">Start Camera + Audio</button>
   </div>
@@ -355,6 +356,7 @@
   let handLandmarker;
   let isRunning = false;
   let lastHandTime = 0;
+  const pointMemory = new Map();
 
   const state = {
     active: false,
@@ -367,7 +369,22 @@
     tangentialVelocity: 0,
     energy: 0,
     detuneBias: 0,
-    zone: "Idle"
+    zone: "Idle",
+    left: {
+      x: 0,
+      y: 0,
+      pull: 0,
+      pinch: 0,
+      energy: 0
+    },
+    right: {
+      x: 0,
+      y: 0,
+      pull: 0,
+      pinch: 0,
+      energy: 0
+    },
+    duoSpread: 0
   };
 
   const interactionPoints = [];
@@ -541,35 +558,38 @@
     document.getElementById(id).textContent = value;
   }
 
-  function regionWeights(angle) {
-    const top = Math.max(0, Math.cos(angle + Math.PI / 2));
-    const right = Math.max(0, Math.cos(angle));
-    const bottom = Math.max(0, Math.cos(angle - Math.PI / 2));
-    const left = Math.max(0, Math.cos(angle + Math.PI));
-    return { top, right, bottom, left };
-  }
-
-  function regionName(angle) {
-    const deg = (angle * 180 / Math.PI + 360) % 360;
-    if (deg >= 315 || deg < 45) return "Right";
-    if (deg < 135) return "Bottom";
-    if (deg < 225) return "Left";
-    return "Top";
-  }
-
   function updateInteraction() {
     if (interactionPoints.length === 0) {
       state.active = false;
       state.targetPull = lerp(state.targetPull, 0, 0.18);
       state.pinch = lerp(state.pinch, 0, 0.14);
       state.stretch = lerp(state.stretch, 0, 0.16);
+      state.left.x = lerp(state.left.x, 0, 0.18);
+      state.left.y = lerp(state.left.y, 0, 0.18);
+      state.left.pull = lerp(state.left.pull, 0, 0.18);
+      state.left.pinch = lerp(state.left.pinch, 0, 0.18);
+      state.left.energy = lerp(state.left.energy, 0, 0.18);
+      state.right.x = lerp(state.right.x, 0, 0.18);
+      state.right.y = lerp(state.right.y, 0, 0.18);
+      state.right.pull = lerp(state.right.pull, 0, 0.18);
+      state.right.pinch = lerp(state.right.pinch, 0, 0.18);
+      state.right.energy = lerp(state.right.energy, 0, 0.18);
+      state.duoSpread = lerp(state.duoSpread, 0, 0.16);
       return;
     }
 
     state.active = true;
     const pts = interactionPoints;
-    const centerX = pts.reduce((sum, p) => sum + p.x, 0) / pts.length;
-    const centerY = pts.reduce((sum, p) => sum + p.y, 0) / pts.length;
+    const weighted = pts.reduce((acc, p) => {
+      const w = 0.5 + p.pullStrength + p.pinchStrength * 0.5;
+      acc.x += p.x * w;
+      acc.y += p.y * w;
+      acc.w += w;
+      return acc;
+    }, { x: 0, y: 0, w: 0 });
+
+    const centerX = weighted.x / Math.max(weighted.w, 0.001);
+    const centerY = weighted.y / Math.max(weighted.w, 0.001);
     const dx = centerX - cx;
     const dy = centerY - cy;
     const dist = Math.hypot(dx, dy);
@@ -579,15 +599,16 @@
     let stretch = 0;
     if (pts.length >= 2) {
       const d = Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y);
-      pinch = clamp((d - blobRadius * 0.3) / (blobRadius * 0.9), 0, 1);
+      pinch = clamp((d - blobRadius * 0.2) / (blobRadius * 1.4), 0, 1);
       const a1 = Math.atan2(pts[0].y - cy, pts[0].x - cx);
       const a2 = Math.atan2(pts[1].y - cy, pts[1].x - cx);
       stretch = clamp(Math.abs(angleDelta(a1, a2)) / Math.PI, 0, 1);
+      state.duoSpread = lerp(state.duoSpread, clamp(d / (baseRadius * 2.6), 0, 1), 0.18);
     } else {
-      pinch = pts[0].pinchStrength || 0;
+      state.duoSpread = lerp(state.duoSpread, 0, 0.2);
     }
 
-    const pull = clamp((dist - baseRadius * 0.72) / (baseRadius * 1.05), 0, 1.1);
+    const pull = clamp((dist - baseRadius * 0.48) / (baseRadius * 1.2), 0, 1.1);
     const prevAngle = state.targetAngle;
     const prevPull = state.targetPull;
 
@@ -604,24 +625,61 @@
     const gestureImpulse = Math.min(1, Math.abs(state.radialVelocity) * 0.65 + Math.abs(state.tangentialVelocity) * 0.55);
     state.energy = clamp(lerp(state.energy, gestureImpulse, 0.18) * 0.985, 0, 1);
     state.detuneBias = lerp(state.detuneBias, state.tangentialVelocity * 9, 0.12);
-    state.zone = regionName(angle);
+    state.zone = pts.length >= 2 ? "Dual" : (pts[0].handedness === "Left" ? "Left Hand" : "Right Hand");
+
+    const leftPoint = pts.find((p) => p.handedness === "Left");
+    const rightPoint = pts.find((p) => p.handedness === "Right");
+
+    if (leftPoint) {
+      state.left.x = lerp(state.left.x, leftPoint.normX, 0.28);
+      state.left.y = lerp(state.left.y, leftPoint.normY, 0.28);
+      state.left.pull = lerp(state.left.pull, leftPoint.pullStrength, 0.24);
+      state.left.pinch = lerp(state.left.pinch, leftPoint.pinchStrength, 0.24);
+      state.left.energy = lerp(state.left.energy, leftPoint.motion, 0.2);
+    } else {
+      state.left.x = lerp(state.left.x, 0, 0.18);
+      state.left.y = lerp(state.left.y, 0, 0.18);
+      state.left.pull = lerp(state.left.pull, 0, 0.18);
+      state.left.pinch = lerp(state.left.pinch, 0, 0.18);
+      state.left.energy = lerp(state.left.energy, 0, 0.18);
+    }
+
+    if (rightPoint) {
+      state.right.x = lerp(state.right.x, rightPoint.normX, 0.28);
+      state.right.y = lerp(state.right.y, rightPoint.normY, 0.28);
+      state.right.pull = lerp(state.right.pull, rightPoint.pullStrength, 0.24);
+      state.right.pinch = lerp(state.right.pinch, rightPoint.pinchStrength, 0.24);
+      state.right.energy = lerp(state.right.energy, rightPoint.motion, 0.2);
+    } else {
+      state.right.x = lerp(state.right.x, 0, 0.18);
+      state.right.y = lerp(state.right.y, 0, 0.18);
+      state.right.pull = lerp(state.right.pull, 0, 0.18);
+      state.right.pinch = lerp(state.right.pinch, 0, 0.18);
+      state.right.energy = lerp(state.right.energy, 0, 0.18);
+    }
   }
 
   function applyBlobPhysics() {
-    const activeAngle = state.targetAngle;
     const pullStrength = state.pull;
     const pinchBoost = state.pinch;
     const energyBoost = state.energy;
-    blobRadius = lerp(blobRadius, baseRadius * (1 + pullStrength * 0.08 + pinchBoost * 0.03), 0.08);
-    innerRadius = lerp(innerRadius, baseRadius * (0.66 - pinchBoost * 0.08 + energyBoost * 0.03), 0.08);
+    blobRadius = lerp(blobRadius, baseRadius * (1 + pullStrength * 0.06 + pinchBoost * 0.02 + state.duoSpread * 0.03), 0.08);
+    innerRadius = lerp(innerRadius, baseRadius * (0.66 - pinchBoost * 0.07 + energyBoost * 0.02), 0.08);
 
     for (const node of nodes) {
-      const d = angleDelta(node.angle, activeAngle);
-      const focus = Math.exp(-(d * d) / (0.16 + state.stretch * 0.28));
-      const dragLobe = state.active ? focus * (pullStrength * baseRadius * (0.55 + pinchBoost * 0.3)) : 0;
-      const counterLobe = state.active ? Math.exp(-((Math.abs(Math.abs(d) - Math.PI)) ** 2) / 0.42) * (-pullStrength * baseRadius * 0.18) : 0;
-      const ripple = state.active ? Math.sin(d * 4 - time * 0.08) * energyBoost * 8 : 0;
-      const target = dragLobe + counterLobe + ripple;
+      let target = 0;
+
+      for (const point of interactionPoints) {
+        const d = angleDelta(node.angle, point.angle);
+        const focusWidth = 0.11 + point.pinchStrength * 0.18 + state.stretch * 0.14;
+        const focus = Math.exp(-(d * d) / focusWidth);
+        const dragLobe = focus * (point.pullStrength * baseRadius * (0.46 + point.pinchStrength * 0.34));
+        const counterLobe = Math.exp(-((Math.abs(Math.abs(d) - Math.PI)) ** 2) / 0.34) * (-point.pullStrength * baseRadius * 0.14);
+        const ripple = Math.sin(d * (3 + point.motion * 2) - time * 0.08) * point.motion * 6;
+        target += dragLobe + counterLobe + ripple;
+      }
+
+      target += Math.sin((node.angle + time * 0.01) * 2) * state.duoSpread * 3;
 
       node.vel += (target - node.disp) * 0.11;
       node.vel += -node.disp * 0.018;
@@ -639,27 +697,34 @@
   function updateAudio() {
     if (!started || !audioCtx) return;
     const now = audioCtx.currentTime;
-    const weights = regionWeights(state.targetAngle);
+    const globalPull = clamp(state.pull, 0, 1);
+    const globalPinch = state.pinch;
+    const globalEnergy = state.energy;
 
-    const topAmt = weights.top;
-    const rightAmt = weights.right;
-    const bottomAmt = weights.bottom;
-    const leftAmt = weights.left;
-    const pull = clamp(state.pull, 0, 1);
-    const pinch = state.pinch;
-    const energy = state.energy;
+    const leftX = state.left.x;
+    const leftY = state.left.y;
+    const leftPull = state.left.pull;
+    const leftPinch = state.left.pinch;
+    const leftEnergy = state.left.energy;
 
-    const cutoff = 160 + Math.pow(topAmt * 0.85 + pull * 0.72 + energy * 0.5, 2.15) * 6600;
-    const shimmerWet = clamp(0.14 + rightAmt * 0.38 + pull * 0.22 + energy * 0.14, 0.08, 0.92);
-    const grit = clamp(0.12 + bottomAmt * 0.42 + pinch * 0.26 + energy * 0.2, 0.08, 0.96);
-    const detune = Math.round((leftAmt * 16 + Math.abs(state.detuneBias) + energy * 10) * (state.tangentialVelocity < 0 ? -1 : 1));
-    const resonance = 0.8 + pinch * 8 + energy * 3.5 + topAmt * 1.8;
-    const pan = clamp((rightAmt - leftAmt) * 0.7 + state.tangentialVelocity * 0.12, -1, 1);
-    const lfoRate = 0.12 + pinch * 0.55 + energy * 0.33;
-    const lfoAmt = 4 + topAmt * 14 + leftAmt * 8 + energy * 10;
+    const rightX = state.right.x;
+    const rightY = state.right.y;
+    const rightPull = state.right.pull;
+    const rightPinch = state.right.pinch;
+    const rightEnergy = state.right.energy;
+
+    const cutoff = 180 + Math.pow(clamp((1 - leftY) * 0.5 + leftPull * 0.9 + globalEnergy * 0.4, 0, 1.8), 2.1) * 7600;
+    const shimmerWet = clamp(0.08 + ((leftX + 1) * 0.5) * 0.55 + leftPull * 0.18 + state.duoSpread * 0.12, 0.05, 0.95);
+    const resonance = 0.75 + leftPinch * 9 + leftEnergy * 3.2 + state.duoSpread * 1.5;
+    const grit = clamp(0.08 + ((1 - rightY) * 0.5) * 0.5 + rightPinch * 0.26 + rightPull * 0.16 + rightEnergy * 0.22, 0.04, 0.98);
+    const detune = Math.round((rightX * 22) + state.detuneBias * 0.5 + rightEnergy * 12);
+    const pan = clamp(rightX * 0.8 + leftX * 0.18, -1, 1);
+    const lfoRate = 0.08 + leftEnergy * 0.25 + rightEnergy * 0.35 + state.duoSpread * 0.2;
+    const lfoAmt = 3 + leftPull * 10 + rightEnergy * 7 + state.duoSpread * 7;
+    const droneLift = state.duoSpread * 8 + leftY * -3;
 
     filter1.frequency.setTargetAtTime(cutoff, now, 0.04);
-    filter2.frequency.setTargetAtTime(cutoff * (1.6 + topAmt * 0.8), now, 0.05);
+    filter2.frequency.setTargetAtTime(cutoff * (1.45 + leftPull * 0.7), now, 0.05);
     filter1.Q.setTargetAtTime(resonance, now, 0.05);
     filter2.Q.setTargetAtTime(Math.min(resonance * 0.4, 6), now, 0.05);
     shimmerSend.gain.setTargetAtTime(shimmerWet, now, 0.06);
@@ -669,20 +734,20 @@
     lfoDepth.gain.setTargetAtTime(lfoAmt, now, 0.08);
     waveshaper.curve = makeDistortionCurve(grit);
 
-    const baseFreq = 73.42 + topAmt * 10 + leftAmt * 4;
+    const baseFreq = 73.42 + droneLift + globalPull * 4;
     droneVoices[0].osc.frequency.setTargetAtTime(baseFreq, now, 0.08);
-    droneVoices[1].osc.frequency.setTargetAtTime(baseFreq * (1.498 + rightAmt * 0.01), now, 0.08);
-    droneVoices[2].osc.frequency.setTargetAtTime(baseFreq * (1.996 + topAmt * 0.015), now, 0.08);
+    droneVoices[1].osc.frequency.setTargetAtTime(baseFreq * (1.498 + state.duoSpread * 0.018), now, 0.08);
+    droneVoices[2].osc.frequency.setTargetAtTime(baseFreq * (1.996 + leftPull * 0.02), now, 0.08);
     droneVoices[0].osc.detune.setTargetAtTime(detune * 0.6, now, 0.05);
-    droneVoices[1].osc.detune.setTargetAtTime(-detune * 0.4 + pinch * 8, now, 0.05);
-    droneVoices[2].osc.detune.setTargetAtTime(detune * 0.25 + energy * 6, now, 0.05);
-    bodyGain.gain.setTargetAtTime(0.18 + pull * 0.09 + energy * 0.06, now, 0.08);
-    masterGain.gain.setTargetAtTime(0.5 + pull * 0.06, now, 0.1);
+    droneVoices[1].osc.detune.setTargetAtTime(-detune * 0.35 + globalPinch * 9, now, 0.05);
+    droneVoices[2].osc.detune.setTargetAtTime(detune * 0.22 + globalEnergy * 7, now, 0.05);
+    bodyGain.gain.setTargetAtTime(0.18 + globalPull * 0.08 + globalEnergy * 0.05 + state.duoSpread * 0.03, now, 0.08);
+    masterGain.gain.setTargetAtTime(0.5 + globalPull * 0.05, now, 0.1);
 
     setText("zoneVal", state.zone);
-    setText("pullVal", Math.round(pull * 100) + "%");
-    setText("pinchVal", Math.round(pinch * 100) + "%");
-    setText("energyVal", Math.round(energy * 100) + "%");
+    setText("pullVal", Math.round(globalPull * 100) + "%");
+    setText("pinchVal", Math.round(globalPinch * 100) + "%");
+    setText("energyVal", Math.round(globalEnergy * 100) + "%");
     setText("cutoffVal", Math.round(cutoff) + " Hz");
     setText("reverbVal", Math.round(shimmerWet * 100) + "%");
     setText("gritVal", Math.round(grit * 100) + "%");
@@ -764,13 +829,17 @@
     for (const point of interactionPoints) {
       ctx.beginPath();
       ctx.arc(point.x, point.y, 10 + point.pinchStrength * 8, 0, TAU);
-      ctx.fillStyle = point.engaged ? "rgba(255, 199, 123, 0.4)" : "rgba(124, 246, 216, 0.2)";
+      ctx.fillStyle = point.handedness === "Left"
+        ? "rgba(110, 178, 255, 0.34)"
+        : "rgba(255, 199, 123, 0.4)";
       ctx.fill();
 
       ctx.beginPath();
       ctx.arc(point.x, point.y, 20 + point.pinchStrength * 16, 0, TAU);
       ctx.lineWidth = 1;
-      ctx.strokeStyle = point.engaged ? "rgba(255, 199, 123, 0.55)" : "rgba(124, 246, 216, 0.35)";
+      ctx.strokeStyle = point.handedness === "Left"
+        ? "rgba(110, 178, 255, 0.68)"
+        : "rgba(255, 199, 123, 0.62)";
       ctx.stroke();
 
       ctx.beginPath();
@@ -779,6 +848,10 @@
       ctx.lineWidth = 2;
       ctx.strokeStyle = "rgba(255, 127, 142, 0.42)";
       ctx.stroke();
+
+      ctx.fillStyle = "rgba(214, 237, 245, 0.78)";
+      ctx.font = "12px Georgia";
+      ctx.fillText(point.handedness, point.x + 16, point.y - 14);
     }
   }
 
@@ -850,24 +923,55 @@
     interactionPoints.length = 0;
     if (!results.landmarks || !results.landmarks.length) return;
 
-    for (const lm of results.landmarks) {
+    for (let i = 0; i < results.landmarks.length; i++) {
+      const lm = results.landmarks[i];
       const pinch = pinchDist(lm);
       const pinchStrength = clamp(1.15 - pinch * 5.4, 0, 1);
       const thumb = screenPoint(lm[4]);
       const index = screenPoint(lm[8]);
+      const pinchX = (thumb.x + index.x) * 0.5;
+      const pinchY = (thumb.y + index.y) * 0.5;
+      const handedness = results.handednesses?.[i]?.[0]?.categoryName || (pinchX < cx ? "Left" : "Right");
+      const key = handedness;
+      const prev = pointMemory.get(key);
+      const vx = prev ? pinchX - prev.x : 0;
+      const vy = prev ? pinchY - prev.y : 0;
+      const speed = Math.hypot(vx, vy);
+      const dx = pinchX - cx;
+      const dy = pinchY - cy;
+      const dist = Math.hypot(dx, dy);
+      const angle = Math.atan2(dy, dx);
+      const normRadius = clamp(dist / (baseRadius * 1.65), 0, 1.2);
+      const pullStrength = clamp((dist - baseRadius * 0.45) / (baseRadius * 1.2), 0, 1.15);
+
       const pinchPoint = {
-        x: (thumb.x + index.x) * 0.5,
-        y: (thumb.y + index.y) * 0.5,
+        x: pinchX,
+        y: pinchY,
         thumbX: thumb.x,
         thumbY: thumb.y,
         indexX: index.x,
         indexY: index.y,
+        handedness,
+        angle,
+        normX: clamp(dx / (baseRadius * 1.4), -1, 1),
+        normY: clamp(dy / (baseRadius * 1.4), -1, 1),
+        normRadius,
+        pullStrength,
+        motion: clamp(speed / 26, 0, 1),
         pinchStrength,
         engaged: pinchStrength > 0.3
       };
 
+      pointMemory.set(key, { x: pinchX, y: pinchY });
+
       if (pinchPoint.engaged) {
         interactionPoints.push(pinchPoint);
+      }
+    }
+
+    for (const key of Array.from(pointMemory.keys())) {
+      if (!interactionPoints.some((point) => point.handedness === key)) {
+        pointMemory.delete(key);
       }
     }
   }
