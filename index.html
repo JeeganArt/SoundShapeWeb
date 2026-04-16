@@ -165,7 +165,7 @@
       <div class="stats">
         <div class="stat"><strong>Cutoff</strong><span class="stat-value" id="cutoffVal">20 Hz</span></div>
         <div class="stat"><strong>Reverb</strong><span class="stat-value" id="reverbVal">50%</span></div>
-        <div class="stat"><strong>Grit</strong><span class="stat-value" id="gritVal">4%</span></div>
+        <div class="stat"><strong>Texture</strong><span class="stat-value" id="gritVal">0%</span></div>
         <div class="stat"><strong>Detune</strong><span class="stat-value" id="detuneVal">0 ct</span></div>
       </div>
     </div>
@@ -491,7 +491,8 @@
     droneVoices = [
       { ratio: 1, gain: 0.21, type: "sawtooth", detune: -4 },
       { ratio: 1.5, gain: 0.09, type: "triangle", detune: 3 },
-      { ratio: 2, gain: 0.06, type: "sine", detune: 6 }
+      { ratio: 2, gain: 0.06, type: "sine", detune: 6 },
+      { ratio: 0.5, gain: 0, type: "sine", detune: 0 }
     ].map((v) => {
       const osc = audioCtx.createOscillator();
       const gain = audioCtx.createGain();
@@ -630,8 +631,16 @@
     const cutoff = 20 + Math.pow(cutoffDrive, 2.2) * 9980;
     const shimmerWet = clamp(1.0 - (leftY + 1.2) / 2.4, 0, 1);
     const resonance = 0.75 + leftPinch * 13 + leftEnergy * 4.6 + state.duoSpread * 2.4;
-    const gritNorm = clamp(1.0 - (rightY + 1.2) / 2.4, 0, 1);
-    const grit = clamp(0.04 + gritNorm * 0.72 + rightPinch * 0.24, 0.02, 1);
+    // AMBER Y → Texture axis. rightY: -1.2 (top) to +1.2 (bottom)
+    // Center (0) = clean, minimal harmonics
+    // Top (negative rightY) = grit + fifth/octave louder
+    // Bottom (positive rightY) = sub octave, no grit
+    const upperAmount = clamp(-rightY / 1.2, 0, 1);
+    const lowerAmount = clamp(rightY / 1.2, 0, 1);
+    const grit = clamp(0.02 + upperAmount * 0.74 + rightPinch * 0.2, 0.02, 1);
+    const fifthGain = 0.005 + upperAmount * 0.14;
+    const octaveGain = 0.005 + upperAmount * 0.10;
+    const subGain = lowerAmount * 0.22;
     const detuneNorm = clamp(rightX / 1.2, 0, 1);
     const detune = Math.round(detuneNorm * 50 + state.detuneBias * 0.8 + rightEnergy * 12);
     const pan = clamp(rightX * 0.5 + leftX * 0.5, -1, 1);
@@ -654,19 +663,24 @@
     droneVoices[0].osc.frequency.setTargetAtTime(baseFreq, now, 0.08);
     droneVoices[1].osc.frequency.setTargetAtTime(baseFreq * (1.498 + state.duoSpread * 0.028), now, 0.08);
     droneVoices[2].osc.frequency.setTargetAtTime(baseFreq * (1.996 + leftPull * 0.034), now, 0.08);
+    droneVoices[3].osc.frequency.setTargetAtTime(baseFreq * 0.5, now, 0.08);
     droneVoices[0].osc.detune.setTargetAtTime(detune * 0.6, now, 0.05);
     droneVoices[1].osc.detune.setTargetAtTime(-detune * 0.3 + globalPinch * 14, now, 0.05);
     droneVoices[2].osc.detune.setTargetAtTime(detune * 0.28 + globalEnergy * 11, now, 0.05);
+    droneVoices[1].gain.gain.setTargetAtTime(fifthGain, now, 0.06);
+    droneVoices[2].gain.gain.setTargetAtTime(octaveGain, now, 0.06);
+    droneVoices[3].gain.gain.setTargetAtTime(subGain, now, 0.06);
     bodyGain.gain.setTargetAtTime(0.18 + globalPull * 0.12 + globalEnergy * 0.08 + state.duoSpread * 0.05, now, 0.08);
     masterGain.gain.setTargetAtTime(0.5 + globalPull * 0.08, now, 0.1);
 
+    const textureAmount = Math.max(upperAmount, lowerAmount);
     smoothCutoff = lerp(smoothCutoff, clamp((cutoff - 20) / 9980, 0, 1), 0.06);
-    smoothGrit = lerp(smoothGrit, grit, 0.06);
+    smoothGrit = lerp(smoothGrit, textureAmount, 0.06);
     smoothReverb = lerp(smoothReverb, shimmerWet, 0.06);
 
     setText("cutoffVal", Math.round(cutoff) + " Hz");
     setText("reverbVal", Math.round(shimmerWet * 100) + "%");
-    setText("gritVal", Math.round(grit * 100) + "%");
+    setText("gritVal", Math.round(textureAmount * 100) + "%");
     setText("detuneVal", detune + " ct");
   }
 
