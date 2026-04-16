@@ -591,13 +591,13 @@
          Pinch: extra grit, resonance via voice detune
     */
 
-    // BLUE X → Cutoff: leftX from -1.2 (closed) to 0 (open)
-    const cutoffNorm = clamp((leftX + 1.2) / 1.2, 0, 1); // 0 at far left, 1 near center
+    // BLUE X → Cutoff: leftX from -1.2 (open/bright) to 0 (closed/dark)
+    const cutoffNorm = clamp(1.0 - (leftX + 1.2) / 1.2, 0, 1); // 1 at far left, 0 near center
     const cutoffDrive = clamp(cutoffNorm + leftPinch * 0.08, 0, 1);
     const cutoff = 20 + Math.pow(cutoffDrive, 2.2) * 9980;
 
-    // BLUE Y → Reverb: leftY from -1.2 (dry) to +1.2 (wet)
-    const shimmerWet = clamp((leftY + 1.2) / 2.4, 0, 1);
+    // BLUE Y → Reverb: leftY from -1.2 (wet) to +1.2 (dry)
+    const shimmerWet = clamp(1.0 - (leftY + 1.2) / 2.4, 0, 1);
 
     // Resonance from pinch + energy
     const resonance = 0.75 + leftPinch * 13 + leftEnergy * 4.6 + state.duoSpread * 2.4;
@@ -800,7 +800,7 @@
     for (let i = 0; i < results.landmarks.length; i++) {
       const lm = results.landmarks[i];
       const pinch = pinchDist(lm);
-      const pinchStrength = clamp(1.3 - pinch * 5.8, 0, 1);
+      const pinchStrength = clamp(1.4 - pinch * 4.8, 0, 1);
       const thumb = screenPoint(lm[4]);
       const index = screenPoint(lm[8]);
       const pinchX = (thumb.x + index.x) * 0.5;
@@ -811,8 +811,8 @@
       /* Hysteresis: grab threshold is tight, release threshold is loose.
          Once gripped, you stay engaged until fingers open wide. */
       const wasGripped = gripState.get(key) || false;
-      const grabThreshold = 0.18;
-      const releaseThreshold = 0.08;
+      const grabThreshold = 0.14;
+      const releaseThreshold = 0.04;
       const engaged = wasGripped
         ? pinchStrength > releaseThreshold
         : pinchStrength > grabThreshold;
