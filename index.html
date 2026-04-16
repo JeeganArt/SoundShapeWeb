@@ -257,68 +257,8 @@
     innerRadius = baseRadius * 0.66;
   }
 
-  /* ==================== GHOST HANDS ==================== */
-  function drawGhostHands() {
-    if (interactionPoints.length > 0) {
-      ghostAlpha = lerp(ghostAlpha, 0, 0.15);
-      ghostIdleTimer = 0;
-      if (ghostAlpha < 0.01) return;
-    } else if (!everInteracted) {
-      ghostAlpha = lerp(ghostAlpha, 0.55, 0.015);
-    } else {
-      ghostIdleTimer++;
-      if (ghostIdleTimer > GHOST_IDLE_DELAY) {
-        ghostAlpha = lerp(ghostAlpha, 0.4, 0.01);
-      } else {
-        ghostAlpha = lerp(ghostAlpha, 0, 0.08);
-        if (ghostAlpha < 0.01) return;
-      }
-    }
-
-    if (ghostAlpha < 0.01) return;
-
-    const t = time * 0.008;
-    const pinchCycle = Math.sin(t * 1.2) * 0.5 + 0.5;
-    const fingerGap = 5 + pinchCycle * 24;
-
-    const hands = [
-      { x: cx - baseRadius * 1.5 + Math.sin(t * 0.7) * baseRadius * 0.7,
-        y: cy + Math.cos(t * 0.5) * baseRadius * 0.4,
-        color: "110, 178, 255" },
-      { x: cx + baseRadius * 1.5 + Math.sin(t * 0.6 + 1) * baseRadius * 0.7,
-        y: cy + Math.cos(t * 0.4 + 2) * baseRadius * 0.4,
-        color: "255, 199, 123" }
-    ];
-
-    for (const hand of hands) {
-      ctx.beginPath();
-      ctx.arc(hand.x - fingerGap * 0.5, hand.y, 4.5, 0, TAU);
-      ctx.fillStyle = `rgba(${hand.color}, ${ghostAlpha * 0.55})`;
-      ctx.fill();
-      ctx.beginPath();
-      ctx.arc(hand.x + fingerGap * 0.5, hand.y, 4.5, 0, TAU);
-      ctx.fillStyle = `rgba(${hand.color}, ${ghostAlpha * 0.55})`;
-      ctx.fill();
-      ctx.beginPath();
-      ctx.moveTo(hand.x - fingerGap * 0.5, hand.y);
-      ctx.lineTo(hand.x + fingerGap * 0.5, hand.y);
-      ctx.lineWidth = 1.5;
-      ctx.strokeStyle = `rgba(${hand.color}, ${ghostAlpha * 0.3})`;
-      ctx.stroke();
-      const ringR = 16 + pinchCycle * 10;
-      ctx.beginPath();
-      ctx.arc(hand.x, hand.y, ringR, 0, TAU);
-      ctx.lineWidth = 1;
-      ctx.strokeStyle = `rgba(${hand.color}, ${ghostAlpha * 0.22})`;
-      ctx.stroke();
-      if (ghostAlpha > 0.12) {
-        ctx.font = "11px Georgia, serif";
-        ctx.textAlign = "center";
-        ctx.fillStyle = `rgba(214, 237, 245, ${ghostAlpha * 0.45})`;
-        ctx.fillText("pinch & drag", hand.x, hand.y + ringR + 16);
-      }
-    }
-  }
+  /* ==================== GHOST HANDS (removed) ==================== */
+  function drawGhostHands() {}
 
   /* ==================== HAPTIC PLUCK ==================== */
   function triggerPluck(freq, vol) {
@@ -655,11 +595,11 @@
       let target = 0;
       for (const point of interactionPoints) {
         const d = angleDelta(node.angle, point.angle);
-        const focusWidth = 0.06 + point.pinchStrength * 0.08 + state.stretch * 0.1;
+        const focusWidth = 0.025 + point.pinchStrength * 0.035 + state.stretch * 0.06;
         const focus = Math.exp(-(d * d) / focusWidth);
         const reachDisp = Math.max(0, point.pixelDist - blobRadius);
-        const dragLobe = focus * reachDisp * (0.9 + point.pinchStrength * 0.4);
-        const counterLobe = Math.exp(-((Math.abs(Math.abs(d) - Math.PI)) ** 2) / 0.28) * (-reachDisp * 0.15 * focus);
+        const dragLobe = focus * reachDisp * (0.85 + point.pinchStrength * 0.35);
+        const counterLobe = Math.exp(-((Math.abs(Math.abs(d) - Math.PI)) ** 2) / 0.2) * (-reachDisp * 0.08 * focus);
         const ripple = Math.sin(d * (3 + point.motion * 2.4) - time * 0.08) * point.motion * 10;
         target += dragLobe + counterLobe + ripple;
       }
