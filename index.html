@@ -170,10 +170,10 @@
     <div class="card">
       <div class="title">Sound</div>
       <div class="stats">
-        <div class="stat"><strong>Cutoff</strong><span class="stat-value" id="cutoffVal">420 Hz</span></div>
-        <div class="stat"><strong>Reverb</strong><span class="stat-value" id="reverbVal">28%</span></div>
-        <div class="stat"><strong>Grit</strong><span class="stat-value" id="gritVal">18%</span></div>
-        <div class="stat"><strong>Detune</strong><span class="stat-value" id="detuneVal">4 ct</span></div>
+        <div class="stat"><strong>Cutoff</strong><span class="stat-value" id="cutoffVal">20 Hz</span></div>
+        <div class="stat"><strong>Reverb</strong><span class="stat-value" id="reverbVal">50%</span></div>
+        <div class="stat"><strong>Grit</strong><span class="stat-value" id="gritVal">4%</span></div>
+        <div class="stat"><strong>Detune</strong><span class="stat-value" id="detuneVal">0 ct</span></div>
       </div>
     </div>
   </div>
@@ -575,21 +575,50 @@
     const rightPinch = state.right.pinch;
     const rightEnergy = state.right.energy;
 
-    const cutoffPull = clamp(leftPull / 1.55, 0, 1);
-    const cutoffColor = clamp(((1 - leftY) * 0.5) * cutoffPull, 0, 1);
-    const cutoffDrive = clamp(cutoffPull * 0.86 + cutoffColor * 0.1 + leftPinch * 0.04, 0, 1);
-    const cutoff = 20 + Math.pow(cutoffDrive, 2.1) * 9980;
-    const shimmerWet = clamp(((leftX + 1.2) / 2.4) * 0.95 + state.duoSpread * 0.05, 0, 1);
+    /* === NEW PARAMETER MAPPING ===
+       Blue (left hand, left side of screen):
+         X: Cutoff frequency. leftX ranges -1.2 (far left) to ~0 (center).
+            Map so far left = 20 Hz (closed), near center = 10,000 Hz (open).
+         Y: Reverb. top (-1.2) = dry, bottom (+1.2) = fully wet.
+         Pull: resonance boost, LFO depth
+         Pinch: resonance spike
+
+       Amber (right hand, right side of screen):
+         X: Detune. rightX ranges ~0 (center) to +1.2 (far right).
+            Map so center = 0 ct, far right = +50 ct.
+         Y: Grit/distortion. top (-1.2) = max grit, bottom (+1.2) = clean.
+         Pull: volume boost, drone lift
+         Pinch: extra grit, resonance via voice detune
+    */
+
+    // BLUE X → Cutoff: leftX from -1.2 (closed) to 0 (open)
+    const cutoffNorm = clamp((leftX + 1.2) / 1.2, 0, 1); // 0 at far left, 1 near center
+    const cutoffDrive = clamp(cutoffNorm + leftPinch * 0.08, 0, 1);
+    const cutoff = 20 + Math.pow(cutoffDrive, 2.2) * 9980;
+
+    // BLUE Y → Reverb: leftY from -1.2 (dry) to +1.2 (wet)
+    const shimmerWet = clamp((leftY + 1.2) / 2.4, 0, 1);
+
+    // Resonance from pinch + energy
     const resonance = 0.75 + leftPinch * 13 + leftEnergy * 4.6 + state.duoSpread * 2.4;
-    const grit = clamp(0.04 + ((1 - rightY) * 0.5) * 0.62 + rightPinch * 0.38 + rightPull * 0.22 + rightEnergy * 0.32, 0.02, 1);
-    const detune = Math.round((rightX * 36) + state.detuneBias * 0.8 + rightEnergy * 18);
-    const pan = clamp(rightX * 0.8 + leftX * 0.18, -1, 1);
+
+    // AMBER Y → Grit: rightY from -1.2 (max grit) to +1.2 (clean)
+    const gritNorm = clamp(1.0 - (rightY + 1.2) / 2.4, 0, 1); // 1 at top, 0 at bottom
+    const grit = clamp(0.04 + gritNorm * 0.72 + rightPinch * 0.24, 0.02, 1);
+
+    // AMBER X → Detune: rightX from ~0 (center, 0ct) to +1.2 (far right, +50ct)
+    const detuneNorm = clamp(rightX / 1.2, 0, 1); // 0 near center, 1 at far right
+    const detune = Math.round(detuneNorm * 50 + state.detuneBias * 0.8 + rightEnergy * 12);
+
+    // Pan follows both hands mildly
+    const pan = clamp(rightX * 0.5 + leftX * 0.5, -1, 1);
+
     const lfoRate = 0.06 + leftEnergy * 0.34 + rightEnergy * 0.48 + state.duoSpread * 0.32;
     const lfoAmt = 3 + leftPull * 16 + rightEnergy * 11 + state.duoSpread * 12;
-    const droneLift = state.duoSpread * 12 + leftY * -5 + globalPull * 6;
+    const droneLift = state.duoSpread * 12 + rightPull * 6 + globalPull * 3;
 
     filter1.frequency.setTargetAtTime(cutoff, now, 0.04);
-    filter2.frequency.setTargetAtTime(cutoff * (1.5 + leftPull * 1.05), now, 0.05);
+    filter2.frequency.setTargetAtTime(cutoff * (1.5 + leftPull * 0.6), now, 0.05);
     filter1.Q.setTargetAtTime(resonance, now, 0.05);
     filter2.Q.setTargetAtTime(Math.min(resonance * 0.4, 8), now, 0.05);
     shimmerSend.gain.setTargetAtTime(shimmerWet, now, 0.06);
@@ -604,7 +633,7 @@
     droneVoices[1].osc.frequency.setTargetAtTime(baseFreq * (1.498 + state.duoSpread * 0.028), now, 0.08);
     droneVoices[2].osc.frequency.setTargetAtTime(baseFreq * (1.996 + leftPull * 0.034), now, 0.08);
     droneVoices[0].osc.detune.setTargetAtTime(detune * 0.6, now, 0.05);
-    droneVoices[1].osc.detune.setTargetAtTime(-detune * 0.4 + globalPinch * 14, now, 0.05);
+    droneVoices[1].osc.detune.setTargetAtTime(-detune * 0.3 + globalPinch * 14, now, 0.05);
     droneVoices[2].osc.detune.setTargetAtTime(detune * 0.28 + globalEnergy * 11, now, 0.05);
     bodyGain.gain.setTargetAtTime(0.18 + globalPull * 0.12 + globalEnergy * 0.08 + state.duoSpread * 0.05, now, 0.08);
     masterGain.gain.setTargetAtTime(0.5 + globalPull * 0.08, now, 0.1);
