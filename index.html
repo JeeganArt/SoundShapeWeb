@@ -27,11 +27,7 @@
     width: 100%;
     height: 100%;
     overflow: hidden;
-    background:
-      radial-gradient(circle at 50% 42%, rgba(110, 178, 255, 0.2), transparent 28%),
-      radial-gradient(circle at 18% 18%, rgba(124, 246, 216, 0.12), transparent 20%),
-      radial-gradient(circle at 82% 78%, rgba(255, 199, 123, 0.1), transparent 18%),
-      linear-gradient(180deg, var(--bg2), var(--bg));
+    background: var(--bg);
     color: var(--text);
     font-family: Georgia, "Times New Roman", serif;
     touch-action: none;
@@ -59,10 +55,14 @@
     height: 100%;
   }
 
+  #bgCanvas { z-index: 0; }
+  #scene { z-index: 1; }
+
   .hud {
     position: absolute;
     inset: 0;
     pointer-events: none;
+    z-index: 2;
   }
 
   .sound-panel {
@@ -148,21 +148,14 @@
   }
 
   @media (max-width: 780px) {
-    .sound-panel {
-      right: 12px;
-      bottom: 12px;
-      left: 12px;
-    }
-
-    .card {
-      max-width: none;
-      min-width: 0;
-    }
+    .sound-panel { right: 12px; bottom: 12px; left: 12px; }
+    .card { max-width: none; min-width: 0; }
   }
 </style>
 </head>
 <body>
 <video id="webcam" autoplay playsinline muted></video>
+<canvas id="bgCanvas"></canvas>
 <canvas id="scene"></canvas>
 
 <div class="hud">
@@ -189,86 +182,56 @@
   const video = document.getElementById("webcam");
   const canvas = document.getElementById("scene");
   const ctx = canvas.getContext("2d");
+  const bgCanvas = document.getElementById("bgCanvas");
+  const bgCtx = bgCanvas.getContext("2d");
 
   const POINTS = 88;
   const TAU = Math.PI * 2;
   const DPR = Math.min(window.devicePixelRatio || 1, 2);
 
-  let width = 0;
-  let height = 0;
-  let cx = 0;
-  let cy = 0;
-  let baseRadius = 0;
-  let blobRadius = 0;
-  let innerRadius = 0;
-  let time = 0;
+  let width = 0, height = 0, cx = 0, cy = 0;
+  let baseRadius = 0, blobRadius = 0, innerRadius = 0, time = 0;
 
   const nodes = Array.from({ length: POINTS }, (_, i) => ({
-    angle: (i / POINTS) * TAU,
-    disp: 0,
-    vel: 0
+    angle: (i / POINTS) * TAU, disp: 0, vel: 0
   }));
 
-  let handLandmarker;
-  let isRunning = false;
-  let lastHandTime = 0;
+  let handLandmarker, isRunning = false, lastHandTime = 0;
   const pointMemory = new Map();
-  const gripState = new Map(); // hysteresis: once pinched, stays engaged until fully released
+  const gripState = new Map();
 
   const state = {
-    active: false,
-    targetAngle: 0,
-    targetPull: 0,
-    pull: 0,
-    pinch: 0,
-    stretch: 0,
-    radialVelocity: 0,
-    tangentialVelocity: 0,
-    energy: 0,
-    detuneBias: 0,
-    left: {
-      x: 0,
-      y: 0,
-      pull: 0,
-      pinch: 0,
-      energy: 0
-    },
-    right: {
-      x: 0,
-      y: 0,
-      pull: 0,
-      pinch: 0,
-      energy: 0
-    },
+    active: false, targetAngle: 0, targetPull: 0, pull: 0,
+    pinch: 0, stretch: 0, radialVelocity: 0, tangentialVelocity: 0,
+    energy: 0, detuneBias: 0,
+    left: { x: 0, y: 0, pull: 0, pinch: 0, energy: 0 },
+    right: { x: 0, y: 0, pull: 0, pinch: 0, energy: 0 },
     duoSpread: 0
   };
 
   const interactionPoints = [];
 
-  let audioCtx;
-  let analyser;
-  let masterGain;
-  let bodyGain;
-  let shimmerSend;
-  let dryGain;
-  let filter1;
-  let filter2;
-  let waveshaper;
-  let stereoPanner;
-  let convolver;
-  let lfo;
-  let lfoDepth;
+  // Smoothed audio values for background visuals
+  let smoothCutoff = 0, smoothGrit = 0, smoothReverb = 0;
+
+  // Ghost hands onboarding
+  let ghostAlpha = 0, ghostActive = true, ghostIdleTimer = 0;
+  const GHOST_IDLE_DELAY = 240;
+  let everInteracted = false;
+
+  // Haptic pluck state
+  const prevEngaged = new Map();
+
+  // Frequency data buffer for reactive core
+  let freqData;
+
+  let audioCtx, analyser, masterGain, bodyGain, shimmerSend, dryGain;
+  let filter1, filter2, waveshaper, stereoPanner, convolver, lfo, lfoDepth;
   let droneVoices = [];
   let started = false;
 
-  function lerp(a, b, t) {
-    return a + (b - a) * t;
-  }
-
-  function clamp(v, min, max) {
-    return Math.min(max, Math.max(min, v));
-  }
-
+  function lerp(a, b, t) { return a + (b - a) * t; }
+  function clamp(v, min, max) { return Math.min(max, Math.max(min, v)); }
   function angleDelta(a, b) {
     let d = a - b;
     while (d > Math.PI) d -= TAU;
@@ -279,11 +242,14 @@
   function resize() {
     width = window.innerWidth;
     height = window.innerHeight;
-    canvas.width = Math.floor(width * DPR);
-    canvas.height = Math.floor(height * DPR);
-    canvas.style.width = width + "px";
-    canvas.style.height = height + "px";
+    for (const c of [canvas, bgCanvas]) {
+      c.width = Math.floor(width * DPR);
+      c.height = Math.floor(height * DPR);
+      c.style.width = width + "px";
+      c.style.height = height + "px";
+    }
     ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    bgCtx.setTransform(DPR, 0, 0, DPR, 0, 0);
     cx = width * 0.5;
     cy = height * 0.5;
     baseRadius = Math.min(width, height) * 0.18;
@@ -291,19 +257,254 @@
     innerRadius = baseRadius * 0.66;
   }
 
-  function createShimmerIR(ctx, duration, decay, brightness) {
-    const len = Math.floor(ctx.sampleRate * duration);
-    const buffer = ctx.createBuffer(2, len, ctx.sampleRate);
+  /* ==================== GHOST HANDS ==================== */
+  function drawGhostHands() {
+    if (interactionPoints.length > 0) {
+      ghostAlpha = lerp(ghostAlpha, 0, 0.15);
+      ghostIdleTimer = 0;
+      if (ghostAlpha < 0.01) return;
+    } else if (!everInteracted) {
+      ghostAlpha = lerp(ghostAlpha, 0.55, 0.015);
+    } else {
+      ghostIdleTimer++;
+      if (ghostIdleTimer > GHOST_IDLE_DELAY) {
+        ghostAlpha = lerp(ghostAlpha, 0.4, 0.01);
+      } else {
+        ghostAlpha = lerp(ghostAlpha, 0, 0.08);
+        if (ghostAlpha < 0.01) return;
+      }
+    }
+
+    if (ghostAlpha < 0.01) return;
+
+    const t = time * 0.008;
+    const pinchCycle = Math.sin(t * 1.2) * 0.5 + 0.5;
+    const fingerGap = 5 + pinchCycle * 24;
+
+    const hands = [
+      { x: cx - baseRadius * 1.5 + Math.sin(t * 0.7) * baseRadius * 0.7,
+        y: cy + Math.cos(t * 0.5) * baseRadius * 0.4,
+        color: "110, 178, 255" },
+      { x: cx + baseRadius * 1.5 + Math.sin(t * 0.6 + 1) * baseRadius * 0.7,
+        y: cy + Math.cos(t * 0.4 + 2) * baseRadius * 0.4,
+        color: "255, 199, 123" }
+    ];
+
+    for (const hand of hands) {
+      ctx.beginPath();
+      ctx.arc(hand.x - fingerGap * 0.5, hand.y, 4.5, 0, TAU);
+      ctx.fillStyle = `rgba(${hand.color}, ${ghostAlpha * 0.55})`;
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(hand.x + fingerGap * 0.5, hand.y, 4.5, 0, TAU);
+      ctx.fillStyle = `rgba(${hand.color}, ${ghostAlpha * 0.55})`;
+      ctx.fill();
+      ctx.beginPath();
+      ctx.moveTo(hand.x - fingerGap * 0.5, hand.y);
+      ctx.lineTo(hand.x + fingerGap * 0.5, hand.y);
+      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = `rgba(${hand.color}, ${ghostAlpha * 0.3})`;
+      ctx.stroke();
+      const ringR = 16 + pinchCycle * 10;
+      ctx.beginPath();
+      ctx.arc(hand.x, hand.y, ringR, 0, TAU);
+      ctx.lineWidth = 1;
+      ctx.strokeStyle = `rgba(${hand.color}, ${ghostAlpha * 0.22})`;
+      ctx.stroke();
+      if (ghostAlpha > 0.12) {
+        ctx.font = "11px Georgia, serif";
+        ctx.textAlign = "center";
+        ctx.fillStyle = `rgba(214, 237, 245, ${ghostAlpha * 0.45})`;
+        ctx.fillText("pinch & drag", hand.x, hand.y + ringR + 16);
+      }
+    }
+  }
+
+  /* ==================== HAPTIC PLUCK ==================== */
+  function triggerPluck(freq, vol) {
+    if (!audioCtx || !started) return;
+    const now = audioCtx.currentTime;
+    const osc = audioCtx.createOscillator();
+    const env = audioCtx.createGain();
+    const flt = audioCtx.createBiquadFilter();
+    osc.type = "sine";
+    osc.frequency.value = freq;
+    flt.type = "bandpass";
+    flt.frequency.value = freq * 1.5;
+    flt.Q.value = 2;
+    env.gain.setValueAtTime(vol, now);
+    env.gain.exponentialRampToValueAtTime(0.001, now + 0.18);
+    osc.connect(flt);
+    flt.connect(env);
+    env.connect(masterGain);
+    osc.start(now);
+    osc.stop(now + 0.22);
+  }
+
+  function checkEngageDisengage() {
+    for (const key of ["Left", "Right"]) {
+      const wasEng = prevEngaged.get(key) || false;
+      const isEng = interactionPoints.some(p => p.handedness === key);
+      if (isEng && !wasEng) {
+        triggerPluck(key === "Left" ? 660 : 880, 0.12);
+        ghostActive = false;
+        everInteracted = true;
+        ghostIdleTimer = 0;
+      } else if (!isEng && wasEng) {
+        triggerPluck(key === "Left" ? 330 : 440, 0.06);
+      }
+      prevEngaged.set(key, isEng);
+    }
+  }
+
+  /* ==================== AUDIO REACTIVE CORE ==================== */
+  function drawReactiveCore() {
+    if (!analyser) {
+      ctx.beginPath();
+      ctx.arc(cx, cy, innerRadius, 0, TAU);
+      ctx.fillStyle = "rgba(255, 255, 255, 0.05)";
+      ctx.fill();
+      ctx.lineWidth = 1;
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.18)";
+      ctx.stroke();
+      return;
+    }
+
+    if (!freqData) freqData = new Uint8Array(analyser.frequencyBinCount);
+    analyser.getByteFrequencyData(freqData);
+
+    const binCount = freqData.length;
+    const lowEnd = Math.floor(binCount * 0.08);
+    const midEnd = Math.floor(binCount * 0.25);
+    const highStart = Math.floor(binCount * 0.25);
+    const highEnd = Math.floor(binCount * 0.5);
+
+    let lowSum = 0;
+    for (let i = 0; i < lowEnd; i++) lowSum += freqData[i];
+    const lowEnergy = lowSum / (lowEnd * 255);
+
+    let midSum = 0;
+    for (let i = lowEnd; i < midEnd; i++) midSum += freqData[i];
+    const midEnergy = midSum / ((midEnd - lowEnd) * 255);
+
+    let highSum = 0;
+    for (let i = highStart; i < highEnd; i++) highSum += freqData[i];
+    const highEnergy = highSum / ((highEnd - highStart) * 255);
+
+    const coreR = innerRadius * (0.85 + lowEnergy * 0.5 + midEnergy * 0.15);
+    const jaggedAmount = highEnergy * innerRadius * 0.35;
+    const corePoints = 48;
+
+    ctx.beginPath();
+    for (let i = 0; i <= corePoints; i++) {
+      const a = (i / corePoints) * TAU;
+      const freqIdx = Math.floor((i / corePoints) * (highEnd - highStart)) + highStart;
+      const freqVal = (freqData[freqIdx] || 0) / 255;
+      const jag = freqVal * jaggedAmount;
+      const noiseR = coreR + jag + Math.sin(a * 5 + time * 0.04) * midEnergy * 4;
+      const px = cx + Math.cos(a) * noiseR;
+      const py = cy + Math.sin(a) * noiseR;
+      if (i === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    }
+    ctx.closePath();
+
+    const coreGrad = ctx.createRadialGradient(cx, cy, 0, cx, cy, coreR * 1.3);
+    const brightness = 0.06 + lowEnergy * 0.18 + midEnergy * 0.08;
+    const edgeBright = 0.03 + highEnergy * 0.12;
+    coreGrad.addColorStop(0, `rgba(200, 235, 255, ${brightness})`);
+    coreGrad.addColorStop(0.6, `rgba(124, 246, 216, ${edgeBright})`);
+    coreGrad.addColorStop(1, "rgba(110, 178, 255, 0.01)");
+    ctx.fillStyle = coreGrad;
+    ctx.fill();
+    ctx.lineWidth = 1.2;
+    ctx.strokeStyle = `rgba(200, 240, 255, ${0.15 + lowEnergy * 0.25})`;
+    ctx.stroke();
+  }
+
+  /* ==================== REACTIVE BACKGROUND ==================== */
+  function drawReactiveBackground() {
+    bgCtx.clearRect(0, 0, width, height);
+
+    const baseGrad = bgCtx.createLinearGradient(0, 0, 0, height);
+    baseGrad.addColorStop(0, "#0f2430");
+    baseGrad.addColorStop(1, "#07111a");
+    bgCtx.fillStyle = baseGrad;
+    bgCtx.fillRect(0, 0, width, height);
+
+    // Cutoff brightening from center
+    const cutBright = smoothCutoff * 0.14;
+    if (cutBright > 0.005) {
+      const cG = bgCtx.createRadialGradient(cx, cy * 0.85, 0, cx, cy * 0.85, Math.max(width, height) * 0.7);
+      cG.addColorStop(0, `rgba(140, 200, 255, ${cutBright})`);
+      cG.addColorStop(0.5, `rgba(100, 170, 230, ${cutBright * 0.4})`);
+      cG.addColorStop(1, "rgba(100, 170, 230, 0)");
+      bgCtx.fillStyle = cG;
+      bgCtx.fillRect(0, 0, width, height);
+    }
+
+    // Reverb cool mist
+    const revInt = smoothReverb * 0.12;
+    if (revInt > 0.005) {
+      const rG = bgCtx.createRadialGradient(cx, cy, baseRadius, cx, cy, Math.max(width, height) * 0.8);
+      rG.addColorStop(0, `rgba(100, 120, 200, ${revInt * 0.3})`);
+      rG.addColorStop(0.4, `rgba(80, 100, 180, ${revInt})`);
+      rG.addColorStop(1, `rgba(60, 70, 140, ${revInt * 0.5})`);
+      bgCtx.fillStyle = rG;
+      bgCtx.fillRect(0, 0, width, height);
+    }
+
+    // Grit dark veins from edges
+    const gritInt = smoothGrit;
+    if (gritInt > 0.15) {
+      const vAlpha = (gritInt - 0.15) * 0.35;
+      const gt = time * 0.003;
+      for (let corner = 0; corner < 4; corner++) {
+        const cxc = corner < 2 ? 0 : width;
+        const cyc = corner % 2 === 0 ? 0 : height;
+        const pulse = 0.7 + Math.sin(gt * 2.3 + corner * 1.7) * 0.3;
+        const vG = bgCtx.createRadialGradient(cxc, cyc, 0, cxc, cyc, Math.max(width, height) * (0.45 + gritInt * 0.25) * pulse);
+        vG.addColorStop(0, `rgba(8, 2, 2, ${vAlpha * 0.9})`);
+        vG.addColorStop(0.5, `rgba(20, 6, 4, ${vAlpha * 0.5})`);
+        vG.addColorStop(1, "rgba(20, 6, 4, 0)");
+        bgCtx.fillStyle = vG;
+        bgCtx.fillRect(0, 0, width, height);
+      }
+      const eG = bgCtx.createRadialGradient(cx, cy, Math.min(width, height) * 0.3, cx, cy, Math.max(width, height) * 0.7);
+      eG.addColorStop(0, "rgba(0,0,0,0)");
+      eG.addColorStop(1, `rgba(60, 20, 10, ${vAlpha * 0.6})`);
+      bgCtx.fillStyle = eG;
+      bgCtx.fillRect(0, 0, width, height);
+    }
+
+    // Accent glows
+    const aa = 0.08 + smoothCutoff * 0.06;
+    const g1 = bgCtx.createRadialGradient(cx, cy * 0.84, 0, cx, cy * 0.84, Math.min(width, height) * 0.5);
+    g1.addColorStop(0, `rgba(110, 178, 255, ${aa})`);
+    g1.addColorStop(1, "rgba(110, 178, 255, 0)");
+    bgCtx.fillStyle = g1;
+    bgCtx.fillRect(0, 0, width, height);
+    const g2 = bgCtx.createRadialGradient(width * 0.18, height * 0.18, 0, width * 0.18, height * 0.18, Math.min(width, height) * 0.35);
+    g2.addColorStop(0, `rgba(124, 246, 216, ${aa * 0.6})`);
+    g2.addColorStop(1, "rgba(124, 246, 216, 0)");
+    bgCtx.fillStyle = g2;
+    bgCtx.fillRect(0, 0, width, height);
+  }
+
+  /* ==================== AUDIO ==================== */
+  function createShimmerIR(c, duration, decay, brightness) {
+    const len = Math.floor(c.sampleRate * duration);
+    const buffer = c.createBuffer(2, len, c.sampleRate);
     for (let ch = 0; ch < 2; ch++) {
       const data = buffer.getChannelData(ch);
       for (let i = 0; i < len; i++) {
-        const t = i / ctx.sampleRate;
+        const t = i / c.sampleRate;
         const env = Math.pow(1 - i / len, decay);
-        let sample = (Math.random() * 2 - 1) * env;
-        sample += Math.sin(TAU * 1570 * t + ch * 0.6) * env * 0.02 * brightness;
-        sample += Math.sin(TAU * 3180 * t + ch * 1.1) * env * 0.018 * brightness;
-        sample += Math.sin(TAU * 5200 * t + ch * 1.7) * env * 0.014 * brightness;
-        data[i] = sample * 0.42;
+        let s = (Math.random() * 2 - 1) * env;
+        s += Math.sin(TAU * 1570 * t + ch * 0.6) * env * 0.02 * brightness;
+        s += Math.sin(TAU * 3180 * t + ch * 1.1) * env * 0.018 * brightness;
+        s += Math.sin(TAU * 5200 * t + ch * 1.7) * env * 0.014 * brightness;
+        data[i] = s * 0.42;
       }
     }
     return buffer;
@@ -324,112 +525,63 @@
     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
 
     filter1 = audioCtx.createBiquadFilter();
-    filter1.type = "lowpass";
-    filter1.frequency.value = 420;
-    filter1.Q.value = 0.9;
-
+    filter1.type = "lowpass"; filter1.frequency.value = 420; filter1.Q.value = 0.9;
     filter2 = audioCtx.createBiquadFilter();
-    filter2.type = "lowpass";
-    filter2.frequency.value = 1200;
-    filter2.Q.value = 0.4;
-
+    filter2.type = "lowpass"; filter2.frequency.value = 1200; filter2.Q.value = 0.4;
     waveshaper = audioCtx.createWaveShaper();
-    waveshaper.curve = makeDistortionCurve(0.18);
-    waveshaper.oversample = "4x";
-
-    stereoPanner = audioCtx.createStereoPanner();
-    stereoPanner.pan.value = 0;
-
-    dryGain = audioCtx.createGain();
-    dryGain.gain.value = 0.78;
-
-    shimmerSend = audioCtx.createGain();
-    shimmerSend.gain.value = 0.28;
-
-    masterGain = audioCtx.createGain();
-    masterGain.gain.value = 0.55;
-
-    bodyGain = audioCtx.createGain();
-    bodyGain.gain.value = 0.22;
-
+    waveshaper.curve = makeDistortionCurve(0.18); waveshaper.oversample = "4x";
+    stereoPanner = audioCtx.createStereoPanner(); stereoPanner.pan.value = 0;
+    dryGain = audioCtx.createGain(); dryGain.gain.value = 0.78;
+    shimmerSend = audioCtx.createGain(); shimmerSend.gain.value = 0.28;
+    masterGain = audioCtx.createGain(); masterGain.gain.value = 0.55;
+    bodyGain = audioCtx.createGain(); bodyGain.gain.value = 0.22;
     convolver = audioCtx.createConvolver();
     convolver.buffer = createShimmerIR(audioCtx, 4.2, 1.9, 1);
 
     const reverbBright = audioCtx.createBiquadFilter();
-    reverbBright.type = "highpass";
-    reverbBright.frequency.value = 280;
-    reverbBright.Q.value = 0.5;
-
+    reverbBright.type = "highpass"; reverbBright.frequency.value = 280; reverbBright.Q.value = 0.5;
     const reverbShelf = audioCtx.createBiquadFilter();
-    reverbShelf.type = "highshelf";
-    reverbShelf.frequency.value = 2600;
-    reverbShelf.gain.value = 5;
+    reverbShelf.type = "highshelf"; reverbShelf.frequency.value = 2600; reverbShelf.gain.value = 5;
 
-    analyser = audioCtx.createAnalyser();
-    analyser.fftSize = 2048;
-
-    lfo = audioCtx.createOscillator();
-    lfo.type = "sine";
-    lfo.frequency.value = 0.18;
-    lfoDepth = audioCtx.createGain();
-    lfoDepth.gain.value = 6;
-    lfo.connect(lfoDepth);
-    lfoDepth.connect(filter1.detune);
+    analyser = audioCtx.createAnalyser(); analyser.fftSize = 2048;
+    lfo = audioCtx.createOscillator(); lfo.type = "sine"; lfo.frequency.value = 0.18;
+    lfoDepth = audioCtx.createGain(); lfoDepth.gain.value = 6;
+    lfo.connect(lfoDepth); lfoDepth.connect(filter1.detune);
 
     droneVoices = [
       { ratio: 1, gain: 0.21, type: "sawtooth", detune: -4 },
       { ratio: 1.5, gain: 0.09, type: "triangle", detune: 3 },
       { ratio: 2, gain: 0.06, type: "sine", detune: 6 }
-    ].map((voice) => {
+    ].map((v) => {
       const osc = audioCtx.createOscillator();
       const gain = audioCtx.createGain();
-      osc.type = voice.type;
-      osc.frequency.value = 82.41 * voice.ratio;
-      osc.detune.value = voice.detune;
-      gain.gain.value = voice.gain;
-      osc.connect(gain);
-      gain.connect(bodyGain);
-      osc.start();
-      return { ...voice, osc, gain };
+      osc.type = v.type; osc.frequency.value = 82.41 * v.ratio; osc.detune.value = v.detune;
+      gain.gain.value = v.gain; osc.connect(gain); gain.connect(bodyGain); osc.start();
+      return { ...v, osc, gain };
     });
 
-    bodyGain.connect(waveshaper);
-    waveshaper.connect(filter1);
-    filter1.connect(filter2);
-    filter2.connect(stereoPanner);
-    stereoPanner.connect(dryGain);
-    dryGain.connect(masterGain);
-    filter2.connect(reverbBright);
-    reverbBright.connect(convolver);
-    convolver.connect(reverbShelf);
-    reverbShelf.connect(shimmerSend);
-    shimmerSend.connect(masterGain);
-    masterGain.connect(analyser);
-    analyser.connect(audioCtx.destination);
-
+    bodyGain.connect(waveshaper); waveshaper.connect(filter1); filter1.connect(filter2);
+    filter2.connect(stereoPanner); stereoPanner.connect(dryGain); dryGain.connect(masterGain);
+    filter2.connect(reverbBright); reverbBright.connect(convolver); convolver.connect(reverbShelf);
+    reverbShelf.connect(shimmerSend); shimmerSend.connect(masterGain);
+    masterGain.connect(analyser); analyser.connect(audioCtx.destination);
     lfo.start();
   }
 
-  function setText(id, value) {
-    document.getElementById(id).textContent = value;
-  }
+  function setText(id, value) { document.getElementById(id).textContent = value; }
 
+  /* ==================== INTERACTION ==================== */
   function updateInteraction() {
     if (interactionPoints.length === 0) {
       state.active = false;
       state.targetPull = lerp(state.targetPull, 0, 0.18);
       state.pinch = lerp(state.pinch, 0, 0.14);
       state.stretch = lerp(state.stretch, 0, 0.16);
-      state.left.x = lerp(state.left.x, 0, 0.18);
-      state.left.y = lerp(state.left.y, 0, 0.18);
-      state.left.pull = lerp(state.left.pull, 0, 0.18);
-      state.left.pinch = lerp(state.left.pinch, 0, 0.18);
-      state.left.energy = lerp(state.left.energy, 0, 0.18);
-      state.right.x = lerp(state.right.x, 0, 0.18);
-      state.right.y = lerp(state.right.y, 0, 0.18);
-      state.right.pull = lerp(state.right.pull, 0, 0.18);
-      state.right.pinch = lerp(state.right.pinch, 0, 0.18);
-      state.right.energy = lerp(state.right.energy, 0, 0.18);
+      for (const h of [state.left, state.right]) {
+        h.x = lerp(h.x, 0, 0.18); h.y = lerp(h.y, 0, 0.18);
+        h.pull = lerp(h.pull, 0, 0.18); h.pinch = lerp(h.pinch, 0, 0.18);
+        h.energy = lerp(h.energy, 0, 0.18);
+      }
       state.duoSpread = lerp(state.duoSpread, 0, 0.16);
       return;
     }
@@ -438,21 +590,17 @@
     const pts = interactionPoints;
     const weighted = pts.reduce((acc, p) => {
       const w = 0.5 + p.pullStrength + p.pinchStrength * 0.5;
-      acc.x += p.x * w;
-      acc.y += p.y * w;
-      acc.w += w;
+      acc.x += p.x * w; acc.y += p.y * w; acc.w += w;
       return acc;
     }, { x: 0, y: 0, w: 0 });
 
     const centerX = weighted.x / Math.max(weighted.w, 0.001);
     const centerY = weighted.y / Math.max(weighted.w, 0.001);
-    const dx = centerX - cx;
-    const dy = centerY - cy;
+    const dx = centerX - cx, dy = centerY - cy;
     const dist = Math.hypot(dx, dy);
     const angle = Math.atan2(dy, dx);
 
-    let pinch = 0;
-    let stretch = 0;
+    let pinch = 0, stretch = 0;
     if (pts.length >= 2) {
       const d = Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y);
       pinch = clamp((d - blobRadius * 0.12) / (blobRadius * 1.8), 0, 1);
@@ -460,9 +608,7 @@
       const a2 = Math.atan2(pts[1].y - cy, pts[1].x - cx);
       stretch = clamp(Math.abs(angleDelta(a1, a2)) / Math.PI, 0, 1);
       state.duoSpread = lerp(state.duoSpread, clamp(d / (baseRadius * 3.2), 0, 1.2), 0.18);
-    } else {
-      state.duoSpread = lerp(state.duoSpread, 0, 0.2);
-    }
+    } else { state.duoSpread = lerp(state.duoSpread, 0, 0.2); }
 
     const pullMaxReach = Math.hypot(width, height) * 0.45;
     const pull = clamp(dist / pullMaxReach, 0, 1.55);
@@ -483,72 +629,46 @@
     state.energy = clamp(lerp(state.energy, gestureImpulse, 0.18) * 0.985, 0, 1);
     state.detuneBias = lerp(state.detuneBias, state.tangentialVelocity * 9, 0.12);
 
-    const leftPoint = pts.find((p) => p.handedness === "Left");
-    const rightPoint = pts.find((p) => p.handedness === "Right");
+    const leftPoint = pts.find(p => p.handedness === "Left");
+    const rightPoint = pts.find(p => p.handedness === "Right");
 
-    if (leftPoint) {
-      state.left.x = lerp(state.left.x, leftPoint.normX, 0.28);
-      state.left.y = lerp(state.left.y, leftPoint.normY, 0.28);
-      state.left.pull = lerp(state.left.pull, leftPoint.pullStrength, 0.24);
-      state.left.pinch = lerp(state.left.pinch, leftPoint.pinchStrength, 0.24);
-      state.left.energy = lerp(state.left.energy, leftPoint.motion, 0.2);
-    } else {
-      state.left.x = lerp(state.left.x, 0, 0.18);
-      state.left.y = lerp(state.left.y, 0, 0.18);
-      state.left.pull = lerp(state.left.pull, 0, 0.18);
-      state.left.pinch = lerp(state.left.pinch, 0, 0.18);
-      state.left.energy = lerp(state.left.energy, 0, 0.18);
-    }
-
-    if (rightPoint) {
-      state.right.x = lerp(state.right.x, rightPoint.normX, 0.28);
-      state.right.y = lerp(state.right.y, rightPoint.normY, 0.28);
-      state.right.pull = lerp(state.right.pull, rightPoint.pullStrength, 0.24);
-      state.right.pinch = lerp(state.right.pinch, rightPoint.pinchStrength, 0.24);
-      state.right.energy = lerp(state.right.energy, rightPoint.motion, 0.2);
-    } else {
-      state.right.x = lerp(state.right.x, 0, 0.18);
-      state.right.y = lerp(state.right.y, 0, 0.18);
-      state.right.pull = lerp(state.right.pull, 0, 0.18);
-      state.right.pinch = lerp(state.right.pinch, 0, 0.18);
-      state.right.energy = lerp(state.right.energy, 0, 0.18);
+    for (const [hand, point] of [[state.left, leftPoint], [state.right, rightPoint]]) {
+      if (point) {
+        hand.x = lerp(hand.x, point.normX, 0.28);
+        hand.y = lerp(hand.y, point.normY, 0.28);
+        hand.pull = lerp(hand.pull, point.pullStrength, 0.24);
+        hand.pinch = lerp(hand.pinch, point.pinchStrength, 0.24);
+        hand.energy = lerp(hand.energy, point.motion, 0.2);
+      } else {
+        hand.x = lerp(hand.x, 0, 0.18); hand.y = lerp(hand.y, 0, 0.18);
+        hand.pull = lerp(hand.pull, 0, 0.18); hand.pinch = lerp(hand.pinch, 0, 0.18);
+        hand.energy = lerp(hand.energy, 0, 0.18);
+      }
     }
   }
 
   function applyBlobPhysics() {
-    const pullStrength = state.pull;
-    const pinchBoost = state.pinch;
-    const energyBoost = state.energy;
-    blobRadius = lerp(blobRadius, baseRadius * (1 + pullStrength * 0.12 + pinchBoost * 0.03 + state.duoSpread * 0.04), 0.08);
-    innerRadius = lerp(innerRadius, baseRadius * (0.64 - pinchBoost * 0.09 + energyBoost * 0.03), 0.08);
+    blobRadius = lerp(blobRadius, baseRadius * (1 + state.pull * 0.12 + state.pinch * 0.03 + state.duoSpread * 0.04), 0.08);
+    innerRadius = lerp(innerRadius, baseRadius * (0.64 - state.pinch * 0.09 + state.energy * 0.03), 0.08);
 
     for (const node of nodes) {
       let target = 0;
-
       for (const point of interactionPoints) {
         const d = angleDelta(node.angle, point.angle);
         const focusWidth = 0.06 + point.pinchStrength * 0.08 + state.stretch * 0.1;
         const focus = Math.exp(-(d * d) / focusWidth);
-
-        /* The blob surface should reach the pinch point.
-           pixelDist is the raw distance from center to pinch;
-           we want the node displacement to bridge that gap. */
         const reachDisp = Math.max(0, point.pixelDist - blobRadius);
         const dragLobe = focus * reachDisp * (0.9 + point.pinchStrength * 0.4);
-
         const counterLobe = Math.exp(-((Math.abs(Math.abs(d) - Math.PI)) ** 2) / 0.28) * (-reachDisp * 0.15 * focus);
         const ripple = Math.sin(d * (3 + point.motion * 2.4) - time * 0.08) * point.motion * 10;
         target += dragLobe + counterLobe + ripple;
       }
-
       target += Math.sin((node.angle + time * 0.01) * 2) * state.duoSpread * 3;
-
       node.vel += (target - node.disp) * 0.14;
       node.vel += -node.disp * 0.012;
       node.vel *= 0.82;
       node.disp += node.vel;
     }
-
     for (let i = 0; i < nodes.length; i++) {
       const prev = nodes[(i - 1 + nodes.length) % nodes.length];
       const next = nodes[(i + 1) % nodes.length];
@@ -562,57 +682,19 @@
     const globalPull = clamp(state.pull, 0, 1.55);
     const globalPinch = state.pinch;
     const globalEnergy = state.energy;
+    const { x: leftX, y: leftY, pull: leftPull, pinch: leftPinch, energy: leftEnergy } = state.left;
+    const { x: rightX, y: rightY, pull: rightPull, pinch: rightPinch, energy: rightEnergy } = state.right;
 
-    const leftX = state.left.x;
-    const leftY = state.left.y;
-    const leftPull = state.left.pull;
-    const leftPinch = state.left.pinch;
-    const leftEnergy = state.left.energy;
-
-    const rightX = state.right.x;
-    const rightY = state.right.y;
-    const rightPull = state.right.pull;
-    const rightPinch = state.right.pinch;
-    const rightEnergy = state.right.energy;
-
-    /* === NEW PARAMETER MAPPING ===
-       Blue (left hand, left side of screen):
-         X: Cutoff frequency. leftX ranges -1.2 (far left) to ~0 (center).
-            Map so far left = 20 Hz (closed), near center = 10,000 Hz (open).
-         Y: Reverb. top (-1.2) = dry, bottom (+1.2) = fully wet.
-         Pull: resonance boost, LFO depth
-         Pinch: resonance spike
-
-       Amber (right hand, right side of screen):
-         X: Detune. rightX ranges ~0 (center) to +1.2 (far right).
-            Map so center = 0 ct, far right = +50 ct.
-         Y: Grit/distortion. top (-1.2) = max grit, bottom (+1.2) = clean.
-         Pull: volume boost, drone lift
-         Pinch: extra grit, resonance via voice detune
-    */
-
-    // BLUE X → Cutoff: leftX from -1.2 (open/bright) to 0 (closed/dark)
-    const cutoffNorm = clamp(1.0 - (leftX + 1.2) / 1.2, 0, 1); // 1 at far left, 0 near center
+    const cutoffNorm = clamp(1.0 - (leftX + 1.2) / 1.2, 0, 1);
     const cutoffDrive = clamp(cutoffNorm + leftPinch * 0.08, 0, 1);
     const cutoff = 20 + Math.pow(cutoffDrive, 2.2) * 9980;
-
-    // BLUE Y → Reverb: leftY from -1.2 (wet) to +1.2 (dry)
     const shimmerWet = clamp(1.0 - (leftY + 1.2) / 2.4, 0, 1);
-
-    // Resonance from pinch + energy
     const resonance = 0.75 + leftPinch * 13 + leftEnergy * 4.6 + state.duoSpread * 2.4;
-
-    // AMBER Y → Grit: rightY from -1.2 (max grit) to +1.2 (clean)
-    const gritNorm = clamp(1.0 - (rightY + 1.2) / 2.4, 0, 1); // 1 at top, 0 at bottom
+    const gritNorm = clamp(1.0 - (rightY + 1.2) / 2.4, 0, 1);
     const grit = clamp(0.04 + gritNorm * 0.72 + rightPinch * 0.24, 0.02, 1);
-
-    // AMBER X → Detune: rightX from ~0 (center, 0ct) to +1.2 (far right, +50ct)
-    const detuneNorm = clamp(rightX / 1.2, 0, 1); // 0 near center, 1 at far right
+    const detuneNorm = clamp(rightX / 1.2, 0, 1);
     const detune = Math.round(detuneNorm * 50 + state.detuneBias * 0.8 + rightEnergy * 12);
-
-    // Pan follows both hands mildly
     const pan = clamp(rightX * 0.5 + leftX * 0.5, -1, 1);
-
     const lfoRate = 0.06 + leftEnergy * 0.34 + rightEnergy * 0.48 + state.duoSpread * 0.32;
     const lfoAmt = 3 + leftPull * 16 + rightEnergy * 11 + state.duoSpread * 12;
     const droneLift = state.duoSpread * 12 + rightPull * 6 + globalPull * 3;
@@ -638,12 +720,17 @@
     bodyGain.gain.setTargetAtTime(0.18 + globalPull * 0.12 + globalEnergy * 0.08 + state.duoSpread * 0.05, now, 0.08);
     masterGain.gain.setTargetAtTime(0.5 + globalPull * 0.08, now, 0.1);
 
+    smoothCutoff = lerp(smoothCutoff, clamp((cutoff - 20) / 9980, 0, 1), 0.06);
+    smoothGrit = lerp(smoothGrit, grit, 0.06);
+    smoothReverb = lerp(smoothReverb, shimmerWet, 0.06);
+
     setText("cutoffVal", Math.round(cutoff) + " Hz");
     setText("reverbVal", Math.round(shimmerWet * 100) + "%");
     setText("gritVal", Math.round(grit * 100) + "%");
     setText("detuneVal", detune + " ct");
   }
 
+  /* ==================== DRAWING ==================== */
   function drawBlob() {
     const gradient = ctx.createRadialGradient(cx, cy, innerRadius * 0.2, cx, cy, blobRadius * 1.35);
     gradient.addColorStop(0, "rgba(164, 229, 255, 0.34)");
@@ -657,29 +744,22 @@
       const r = blobRadius + node.disp;
       const x = cx + Math.cos(node.angle) * r;
       const y = cy + Math.sin(node.angle) * r;
-      if (i === 0) {
-        ctx.moveTo(x, y);
-      } else {
+      if (i === 0) { ctx.moveTo(x, y); }
+      else {
         const prev = nodes[i - 1];
         const prevR = blobRadius + prev.disp;
         const px = cx + Math.cos(prev.angle) * prevR;
         const py = cy + Math.sin(prev.angle) * prevR;
-        const mx = (px + x) * 0.5;
-        const my = (py + y) * 0.5;
-        ctx.quadraticCurveTo(px, py, mx, my);
+        ctx.quadraticCurveTo(px, py, (px + x) * 0.5, (py + y) * 0.5);
       }
     }
-    const first = nodes[0];
-    const firstR = blobRadius + first.disp;
-    const firstX = cx + Math.cos(first.angle) * firstR;
-    const firstY = cy + Math.sin(first.angle) * firstR;
-    const last = nodes[nodes.length - 1];
-    const lastR = blobRadius + last.disp;
-    const lastX = cx + Math.cos(last.angle) * lastR;
-    const lastY = cy + Math.sin(last.angle) * lastR;
-    ctx.quadraticCurveTo(lastX, lastY, firstX, firstY);
+    const first = nodes[0], last = nodes[nodes.length - 1];
+    const firstR = blobRadius + first.disp, lastR = blobRadius + last.disp;
+    ctx.quadraticCurveTo(
+      cx + Math.cos(last.angle) * lastR, cy + Math.sin(last.angle) * lastR,
+      cx + Math.cos(first.angle) * firstR, cy + Math.sin(first.angle) * firstR
+    );
     ctx.closePath();
-
     ctx.fillStyle = gradient;
     ctx.fill();
     ctx.lineWidth = 1.4;
@@ -689,29 +769,17 @@
     ctx.stroke();
     ctx.shadowBlur = 0;
 
-    ctx.beginPath();
-    ctx.arc(cx, cy, innerRadius, 0, TAU);
-    ctx.fillStyle = "rgba(255, 255, 255, 0.05)";
-    ctx.fill();
-    ctx.lineWidth = 1;
-    ctx.strokeStyle = "rgba(255, 255, 255, 0.18)";
-    ctx.stroke();
+    drawReactiveCore();
 
     if (state.active) {
       const r = blobRadius + Math.max(0, state.pull) * baseRadius * 0.95;
       const x = cx + Math.cos(state.targetAngle) * r;
       const y = cy + Math.sin(state.targetAngle) * r;
-      ctx.beginPath();
-      ctx.moveTo(cx, cy);
-      ctx.lineTo(x, y);
+      ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(x, y);
       ctx.strokeStyle = "rgba(255, 199, 123, 0.28)";
-      ctx.setLineDash([8, 10]);
-      ctx.stroke();
-      ctx.setLineDash([]);
-      ctx.beginPath();
-      ctx.arc(x, y, 8 + state.energy * 12, 0, TAU);
-      ctx.fillStyle = "rgba(255, 199, 123, 0.35)";
-      ctx.fill();
+      ctx.setLineDash([8, 10]); ctx.stroke(); ctx.setLineDash([]);
+      ctx.beginPath(); ctx.arc(x, y, 8 + state.energy * 12, 0, TAU);
+      ctx.fillStyle = "rgba(255, 199, 123, 0.35)"; ctx.fill();
     }
   }
 
@@ -719,147 +787,94 @@
     for (const point of interactionPoints) {
       ctx.beginPath();
       ctx.arc(point.x, point.y, 10 + point.pinchStrength * 8, 0, TAU);
-      ctx.fillStyle = point.handedness === "Left"
-        ? "rgba(110, 178, 255, 0.34)"
-        : "rgba(255, 199, 123, 0.4)";
+      ctx.fillStyle = point.handedness === "Left" ? "rgba(110, 178, 255, 0.34)" : "rgba(255, 199, 123, 0.4)";
       ctx.fill();
-
       ctx.beginPath();
       ctx.arc(point.x, point.y, 20 + point.pinchStrength * 16, 0, TAU);
       ctx.lineWidth = 1;
-      ctx.strokeStyle = point.handedness === "Left"
-        ? "rgba(110, 178, 255, 0.68)"
-        : "rgba(255, 199, 123, 0.62)";
+      ctx.strokeStyle = point.handedness === "Left" ? "rgba(110, 178, 255, 0.68)" : "rgba(255, 199, 123, 0.62)";
       ctx.stroke();
-
       ctx.beginPath();
-      ctx.moveTo(point.thumbX, point.thumbY);
-      ctx.lineTo(point.indexX, point.indexY);
-      ctx.lineWidth = 2;
-      ctx.strokeStyle = "rgba(255, 127, 142, 0.42)";
-      ctx.stroke();
+      ctx.moveTo(point.thumbX, point.thumbY); ctx.lineTo(point.indexX, point.indexY);
+      ctx.lineWidth = 2; ctx.strokeStyle = "rgba(255, 127, 142, 0.42)"; ctx.stroke();
     }
   }
 
   function drawAura() {
     const pulse = 0.5 + Math.sin(time * 0.02) * 0.5;
-    const ringCount = 4;
-    for (let i = 0; i < ringCount; i++) {
-      const t = i / (ringCount - 1);
+    for (let i = 0; i < 4; i++) {
+      const t = i / 3;
       const radius = baseRadius * (1.18 + t * 0.6 + pulse * 0.02) + state.energy * 18;
-      ctx.beginPath();
-      ctx.arc(cx, cy, radius, 0, TAU);
-      ctx.lineWidth = 1;
-      ctx.strokeStyle = `rgba(126, 208, 255, ${0.12 - t * 0.025})`;
-      ctx.stroke();
+      ctx.beginPath(); ctx.arc(cx, cy, radius, 0, TAU);
+      ctx.lineWidth = 1; ctx.strokeStyle = `rgba(126, 208, 255, ${0.12 - t * 0.025})`; ctx.stroke();
     }
   }
 
+  /* ==================== RENDER ==================== */
   function render() {
     time += 1;
     updateInteraction();
     applyBlobPhysics();
     updateAudio();
-
+    checkEngageDisengage();
+    if (time % 3 === 0) drawReactiveBackground();
     ctx.clearRect(0, 0, width, height);
     drawAura();
     drawBlob();
     drawHands();
-
+    drawGhostHands();
     requestAnimationFrame(render);
   }
 
+  /* ==================== HAND TRACKING ==================== */
   function pinchDist(lm) {
-    return Math.sqrt(
-      (lm[4].x - lm[8].x) ** 2 +
-      (lm[4].y - lm[8].y) ** 2 +
-      (lm[4].z - lm[8].z) ** 2
-    );
+    return Math.sqrt((lm[4].x-lm[8].x)**2 + (lm[4].y-lm[8].y)**2 + (lm[4].z-lm[8].z)**2);
   }
 
   function screenPoint(lm) {
-    return {
-      x: (1 - lm.x) * width,
-      y: lm.y * height
-    };
+    return { x: (1 - lm.x) * width, y: lm.y * height };
   }
 
   function collectInteractionPoints(results) {
     interactionPoints.length = 0;
     if (!results.landmarks || !results.landmarks.length) return;
-
-    /* Compute the half-extents for normalization based on screen size,
-       so parameters span the full x/y axes instead of clamping early. */
-    const halfW = width * 0.45;
-    const halfH = height * 0.45;
-
-    /* Max reach for pullStrength: use half the screen diagonal so
-       dragging all the way to the edge gives full range */
+    const halfW = width * 0.45, halfH = height * 0.45;
     const maxReach = Math.hypot(width, height) * 0.45;
 
     for (let i = 0; i < results.landmarks.length; i++) {
       const lm = results.landmarks[i];
       const pinch = pinchDist(lm);
       const pinchStrength = clamp(1.4 - pinch * 4.8, 0, 1);
-      const thumb = screenPoint(lm[4]);
-      const index = screenPoint(lm[8]);
-      const pinchX = (thumb.x + index.x) * 0.5;
-      const pinchY = (thumb.y + index.y) * 0.5;
+      const thumb = screenPoint(lm[4]), index = screenPoint(lm[8]);
+      const pinchX = (thumb.x + index.x) * 0.5, pinchY = (thumb.y + index.y) * 0.5;
       const handedness = results.handednesses?.[i]?.[0]?.categoryName || (pinchX < cx ? "Left" : "Right");
       const key = handedness;
-
-      /* Hysteresis: grab threshold is tight, release threshold is loose.
-         Once gripped, you stay engaged until fingers open wide. */
       const wasGripped = gripState.get(key) || false;
-      const grabThreshold = 0.14;
-      const releaseThreshold = 0.04;
-      const engaged = wasGripped
-        ? pinchStrength > releaseThreshold
-        : pinchStrength > grabThreshold;
+      const engaged = wasGripped ? pinchStrength > 0.04 : pinchStrength > 0.14;
       gripState.set(key, engaged);
 
       const prev = pointMemory.get(key);
-      const vx = prev ? pinchX - prev.x : 0;
-      const vy = prev ? pinchY - prev.y : 0;
-      const speed = Math.hypot(vx, vy);
-      const dx = pinchX - cx;
-      const dy = pinchY - cy;
+      const vx = prev ? pinchX - prev.x : 0, vy = prev ? pinchY - prev.y : 0;
+      const dx = pinchX - cx, dy = pinchY - cy;
       const dist = Math.hypot(dx, dy);
-      const angle = Math.atan2(dy, dx);
-      /* pullStrength now scales against screen diagonal, not baseRadius */
-      const pullStrength = clamp(dist / maxReach, 0, 1.55);
 
       const pinchPoint = {
-        x: pinchX,
-        y: pinchY,
-        thumbX: thumb.x,
-        thumbY: thumb.y,
-        indexX: index.x,
-        indexY: index.y,
-        handedness,
-        angle,
+        x: pinchX, y: pinchY,
+        thumbX: thumb.x, thumbY: thumb.y, indexX: index.x, indexY: index.y,
+        handedness, angle: Math.atan2(dy, dx),
         normX: clamp(dx / halfW, -1.2, 1.2),
         normY: clamp(dy / halfH, -1.2, 1.2),
-        pullStrength,
-        /* pixelDist: raw pixel distance from blob center, used
-           to extend the blob all the way to the pinch point */
+        pullStrength: clamp(dist / maxReach, 0, 1.55),
         pixelDist: dist,
-        motion: clamp(speed / 26, 0, 1),
-        pinchStrength,
-        engaged
+        motion: clamp(Math.hypot(vx, vy) / 26, 0, 1),
+        pinchStrength, engaged
       };
-
       pointMemory.set(key, { x: pinchX, y: pinchY });
-
-      if (pinchPoint.engaged) {
-        interactionPoints.push(pinchPoint);
-      }
+      if (pinchPoint.engaged) interactionPoints.push(pinchPoint);
     }
-
     for (const key of Array.from(pointMemory.keys())) {
-      if (!interactionPoints.some((point) => point.handedness === key)) {
-        pointMemory.delete(key);
-        gripState.set(key, false);
+      if (!interactionPoints.some(p => p.handedness === key)) {
+        pointMemory.delete(key); gripState.set(key, false);
       }
     }
   }
@@ -869,11 +884,8 @@
     if (video.readyState >= 2) {
       const results = handLandmarker.detectForVideo(video, performance.now());
       collectInteractionPoints(results);
-      if (interactionPoints.length > 0) {
-        lastHandTime = performance.now();
-      } else if (performance.now() - lastHandTime > 240) {
-        interactionPoints.length = 0;
-      }
+      if (interactionPoints.length > 0) lastHandTime = performance.now();
+      else if (performance.now() - lastHandTime > 240) interactionPoints.length = 0;
     }
     requestAnimationFrame(detectHands);
   }
@@ -887,22 +899,17 @@
         modelAssetPath: "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task",
         delegate: "GPU"
       },
-      runningMode: "VIDEO",
-      numHands: 2
+      runningMode: "VIDEO", numHands: 2
     });
   }
 
   async function initCamera() {
     const stream = await navigator.mediaDevices.getUserMedia({
-      video: { width: 1280, height: 720, facingMode: "user" },
-      audio: false
+      video: { width: 1280, height: 720, facingMode: "user" }, audio: false
     });
     video.srcObject = stream;
-    return new Promise((resolve) => {
-      video.onloadedmetadata = async () => {
-        await video.play();
-        resolve();
-      };
+    return new Promise(resolve => {
+      video.onloadedmetadata = async () => { await video.play(); resolve(); };
     });
   }
 
@@ -910,22 +917,18 @@
 
   document.getElementById("startBtn").addEventListener("click", async () => {
     const btn = document.getElementById("startBtn");
-    btn.disabled = true;
-    btn.textContent = "Starting...";
+    btn.disabled = true; btn.textContent = "Starting...";
     try {
       await initCamera();
       await initHandTracking();
       if (!audioCtx) initAudio();
       await audioCtx.resume();
-      started = true;
-      isRunning = true;
+      started = true; isRunning = true;
       lastHandTime = performance.now();
       detectHands();
       document.getElementById("startOverlay").style.display = "none";
     } catch (error) {
-      btn.disabled = false;
-      btn.textContent = "Retry";
-      console.error(error);
+      btn.disabled = false; btn.textContent = "Retry"; console.error(error);
     }
   });
 
